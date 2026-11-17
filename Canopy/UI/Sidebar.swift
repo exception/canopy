@@ -3,6 +3,8 @@ import SwiftUI
 struct Sidebar: View {
     @Environment(AppState.self) private var app
     @State private var filter = ""
+    @State private var newCollectionDB: String?
+    @State private var newCollectionName = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,8 +24,15 @@ struct Sidebar: View {
                             .padding(.bottom, 6)
                         Text("DATABASES").font(.system(size: 10.5, weight: .semibold)).tracking(0.6).foregroundStyle(Color.cText3)
                             .padding(.horizontal, 12).padding(.bottom, 3)
-                        ForEach(s.databases) { db in
-                            DatabaseRow(session: s, db: db, filter: filter)
+                        // One flat list of uniform rows so only what's on screen is built. Nesting every
+                        // collection inside its database row made a 150-collection db a single huge lazy item.
+                        ForEach(treeRows(s)) { row in
+                            switch row.kind {
+                            case .database(let db, let open):
+                                DatabaseRow(session: s, db: db, open: open, loading: s.loadingDBs.contains(db.name)) { newCollectionDB = db.name }
+                            case .collection(let db, let c, let selected, let count):
+                                CollectionRow(session: s, db: db, coll: c, selected: selected, count: count)
+                            }
                         }
                     }
                     .padding(.horizontal, 6)
@@ -47,6 +56,40 @@ struct Sidebar: View {
             }
         }
         .background(Color(ns: Theme.sidebar))
+        .alert("New collection in \(newCollectionDB ?? "")", isPresented: Binding(get: { newCollectionDB != nil }, set: { if !$0 { newCollectionDB = nil } })) {
+            TextField("Name", text: $newCollectionName)
+            Button("Create") {
+                let (db, n) = (newCollectionDB ?? "", newCollectionName)
+                newCollectionName = ""
+                guard let s = app.session, !db.isEmpty, !n.isEmpty else { return }
+                Task { try? await s.service.createCollection(db: db, name: n); await s.loadCollections(db) }
+            }
+            Button("Cancel", role: .cancel) { newCollectionName = "" }
+        }
+    }
+
+    struct TreeRow: Identifiable {
+        enum Kind { case database(DatabaseInfo, open: Bool), collection(String, CollectionInfo, selected: Bool, count: Int?) }
+        let id: String
+        let kind: Kind
+    }
+
+    private func treeRows(_ s: Session) -> [TreeRow] {
+        var rows: [TreeRow] = []
+        let current = app.currentTab?.kind
+        for db in s.databases {
+            let all = s.collections[db.name] ?? []
+            let colls = filter.isEmpty ? all : all.filter { $0.name.localizedCaseInsensitiveContains(filter) }
+            guard filter.isEmpty || !colls.isEmpty || db.name.localizedCaseInsensitiveContains(filter) else { continue }
+            let open = s.expanded.contains(db.name) || (!filter.isEmpty && !colls.isEmpty)
+            rows.append(TreeRow(id: "d:" + db.name, kind: .database(db, open: open)))
+            guard open else { continue }
+            for c in colls {
+                rows.append(TreeRow(id: "c:\(db.name).\(c.name)", kind: .collection(db.name, c,
+                    selected: current == .collection(db: db.name, name: c.name), count: s.stats["\(db.name).\(c.name)"]?.count)))
+            }
+        }
+        return rows
     }
 }
 
@@ -72,52 +115,32 @@ struct SidebarRow: View {
 }
 
 struct DatabaseRow: View {
-    @Environment(AppState.self) private var app
     let session: Session
     let db: DatabaseInfo
-    let filter: String
+    let open: Bool
+    let loading: Bool
+    var onNewCollection: () -> Void
     @State private var hover = false
-    @State private var newCollection: String?
-
-    var collections: [CollectionInfo] {
-        let all = session.collections[db.name] ?? []
-        return filter.isEmpty ? all : all.filter { $0.name.localizedCaseInsensitiveContains(filter) }
-    }
 
     var body: some View {
-        let open = session.expanded.contains(db.name) || (!filter.isEmpty && !collections.isEmpty)
-        if filter.isEmpty || !collections.isEmpty || db.name.localizedCaseInsensitiveContains(filter) {
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 5) {
-                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).foregroundStyle(Color.cText3)
-                        .rotationEffect(.degrees(open ? 90 : 0)).frame(width: 12)
-                    Image(systemName: "cylinder.split.1x2").font(.system(size: 11.5)).foregroundStyle(Color.cText2)
-                    Text(db.name).font(.system(size: 12.5, weight: .medium))
-                    Spacer()
-                    if session.loadingDBs.contains(db.name) { ProgressView().controlSize(.mini) }
-                    Text(Fmt.bytes(db.sizeOnDisk)).font(.system(size: 10.5)).foregroundStyle(Color.cText3).opacity(hover ? 1 : 0.7)
-                }
-                .padding(.horizontal, 6).frame(height: 26)
-                .background(hover ? Color(ns: Theme.hover) : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .contentShape(Rectangle())
-                .onTapGesture { withAnimation(.snappy(duration: 0.18)) { session.toggle(db.name) } }
-                .onHover { hover = $0 }
-                .contextMenu {
-                    Button("Refresh") { Task { await session.loadCollections(db.name) } }
-                    if !session.readOnly { Button("New Collection…") { newCollection = "" } }
-                }
-                if open {
-                    ForEach(collections) { c in CollectionRow(session: session, db: db.name, coll: c) }
-                }
-            }
-            .alert("New collection in \(db.name)", isPresented: Binding(get: { newCollection != nil }, set: { if !$0 { newCollection = nil } })) {
-                TextField("Name", text: Binding(get: { newCollection ?? "" }, set: { newCollection = $0 }))
-                Button("Create") {
-                    let n = newCollection ?? ""
-                    Task { try? await session.service.createCollection(db: db.name, name: n); await session.loadCollections(db.name) }
-                }
-                Button("Cancel", role: .cancel) {}
-            }
+        HStack(spacing: 5) {
+            Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).foregroundStyle(Color.cText3)
+                .rotationEffect(.degrees(open ? 90 : 0)).frame(width: 12)
+                .animation(.snappy(duration: 0.15), value: open)
+            Image(systemName: "cylinder.split.1x2").font(.system(size: 11.5)).foregroundStyle(Color.cText2)
+            Text(db.name).font(.system(size: 12.5, weight: .medium)).lineLimit(1)
+            Spacer()
+            if loading { ProgressView().controlSize(.mini) }
+            Text(Fmt.bytes(db.sizeOnDisk)).font(.system(size: 10.5)).foregroundStyle(Color.cText3).opacity(hover ? 1 : 0.7)
+        }
+        .padding(.horizontal, 6).frame(height: 26)
+        .background(hover ? Color(ns: Theme.hover) : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture { session.toggle(db.name) }
+        .onHover { hover = $0 }
+        .contextMenu {
+            Button("Refresh") { Task { await session.loadCollections(db.name) } }
+            if !session.readOnly { Button("New Collection…", action: onNewCollection) }
         }
     }
 }
@@ -127,17 +150,18 @@ struct CollectionRow: View {
     let session: Session
     let db: String
     let coll: CollectionInfo
+    /// Plain values from the parent, so a row only re-renders when its own selection or count changes.
+    let selected: Bool
+    let count: Int?
     @State private var hover = false
 
     var body: some View {
-        let selected = app.currentTab?.kind == .collection(db: db, name: coll.name)
-        let st = session.stat(db, coll.name)
         HStack(spacing: 6) {
             Image(systemName: coll.isView ? "eye" : "square.stack.3d.up").font(.system(size: 10.5))
                 .foregroundStyle(selected ? Color.cAccent : Color.cText3).frame(width: 14)
             Text(coll.name).font(.system(size: 12.5, weight: selected ? .semibold : .regular)).lineLimit(1)
             Spacer(minLength: 4)
-            if let n = st?.count {
+            if let n = count {
                 Text(Fmt.compact(n)).font(.system(size: 10.5, weight: .medium).monospacedDigit()).foregroundStyle(Color.cText3)
             }
         }
@@ -146,7 +170,6 @@ struct CollectionRow: View {
         .contentShape(Rectangle())
         .onTapGesture { app.open(db: db, collection: coll.name) }
         .onHover { hover = $0 }
-        .help(st.map { "\(Fmt.count($0.count)) documents · \(Fmt.bytes($0.size)) · \($0.indexCount ?? 0) indexes" } ?? coll.name)
         .contextMenu {
             Button("Open in New Tab") { app.open(db: db, collection: coll.name, newTab: true) }
             Button("Analyze Schema") { app.open(db: db, collection: coll.name).mode = .schema }

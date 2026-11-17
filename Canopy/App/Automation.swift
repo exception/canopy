@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import SwiftUI
 import Foundation
 import Network
@@ -179,6 +180,57 @@ enum Automation {
         case "select":
             app.currentTab?.docs.selected = Int(arg)
             return "ok"
+        case "scroll-bench":
+            // scroll-bench <x>: scrolls the scroll view under window point (x, 300) to the bottom in
+            // 20 pt steps, forcing a redraw per step; reports per-frame milliseconds.
+            guard let w = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.titled) }),
+                  let fv = w.contentView?.superview else { return "no window" }
+            let x = Double(arg) ?? 150
+            var v = fv.hitTest(fv.convert(NSPoint(x: x, y: w.frame.height - 300), from: nil))
+            while let view = v, !(view is NSScrollView) { v = view.superview }
+            guard let sv = v as? NSScrollView, let doc = sv.documentView else { return "no scroll view" }
+            var times: [Double] = []
+            sv.contentView.scroll(to: .zero); sv.reflectScrolledClipView(sv.contentView); w.displayIfNeeded()
+            for _ in 0..<400 {
+                let maxY = doc.frame.height - sv.contentView.bounds.height
+                let y = sv.contentView.bounds.origin.y
+                if y >= maxY - 1 { break }
+                let t0 = CACurrentMediaTime()
+                sv.contentView.scroll(to: NSPoint(x: 0, y: min(maxY, y + 20)))
+                sv.reflectScrolledClipView(sv.contentView)
+                w.displayIfNeeded()
+                CATransaction.flush()
+                RunLoop.current.run(until: Date())
+                times.append((CACurrentMediaTime() - t0) * 1000)
+            }
+            guard !times.isEmpty else { return "nothing to scroll" }
+            let sorted = times.sorted()
+            return String(format: "frames %d  median %.2f ms  p95 %.2f ms  max %.2f ms  >16ms: %d",
+                          times.count, sorted[sorted.count / 2], sorted[Int(Double(sorted.count) * 0.95)], sorted.last!, times.filter { $0 > 16 }.count)
+        case "reload-db":
+            guard let s = app.session else { return "no session" }
+            let t0 = Date()
+            await s.loadCollections(arg)
+            return String(format: "%.2f s, %d stats", Date().timeIntervalSince(t0), s.stats.keys.filter { $0.hasPrefix(arg + ".") }.count)
+        case "stats-bench":
+            // Simulates stats trickling in from a slow server: 60 single-collection stat updates,
+            // each followed by a forced render. Reports main-thread ms per update.
+            guard let s = app.session, let w = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.titled) }) else { return "no session" }
+            let keys = s.stats.keys.filter { $0.hasPrefix("bigdb.") }.sorted()
+            guard !keys.isEmpty else { return "no bigdb stats" }
+            var times: [Double] = []
+            for i in 0..<60 {
+                let k = keys[i % keys.count]
+                let t0 = CACurrentMediaTime()
+                if var st = s.stats[k] { st.count = (st.count ?? 0) + 1; s.stats[k] = st }
+                RunLoop.current.run(until: Date())
+                w.contentView?.layoutSubtreeIfNeeded()
+                w.displayIfNeeded()
+                CATransaction.flush()
+                times.append((CACurrentMediaTime() - t0) * 1000)
+            }
+            let sorted = times.sorted()
+            return String(format: "updates %d  median %.2f ms  p95 %.2f ms  max %.2f ms", times.count, sorted[sorted.count / 2], sorted[Int(Double(sorted.count) * 0.95)], sorted.last!)
         case "hittest":
             let a = arg.split(separator: " ").compactMap { Double($0) }
             guard a.count == 2, let w = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.titled) }) else { return "hittest x y" }

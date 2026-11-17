@@ -46,7 +46,8 @@ final class Session {
     func toggle(_ db: String) {
         if expanded.contains(db) { expanded.remove(db) } else {
             expanded.insert(db)
-            Task { await loadCollections(db) }
+            // Already listed: just show it. Refresh (sidebar footer or context menu) reloads.
+            if collections[db] == nil { Task { await loadCollections(db) } }
         }
     }
 
@@ -55,13 +56,27 @@ final class Session {
         defer { loadingDBs.remove(db) }
         guard let list = try? await service.listCollections(db: db) else { return }
         collections[db] = list
-        // Stats in parallel; the tree shows counts as they arrive.
-        await withTaskGroup(of: CollectionInfo?.self) { group in
-            for c in list where !c.isView {
-                group.addTask { [service] in try? await service.collectionStats(db: db, collection: c.name) }
-            }
-            for await s in group { if let s { stats["\(db).\(s.name)"] = s } }
+        // Stats with bounded concurrency, applied in batches: one `stats` write per result made the
+        // whole sidebar re-render ~150 times while it was being scrolled.
+        let names = list.filter { !$0.isView }.map(\.name)
+        var pending: [String: CollectionInfo] = [:]
+        func flush() {
+            guard !pending.isEmpty else { return }
+            var next = stats
+            next.merge(pending) { $1 }
+            stats = next
+            pending.removeAll()
         }
+        await withTaskGroup(of: CollectionInfo?.self) { group in
+            var it = names.makeIterator()
+            for _ in 0..<8 { if let n = it.next() { group.addTask { [service] in try? await service.collectionStats(db: db, collection: n) } } }
+            for await s in group {
+                if let s { pending["\(db).\(s.name)"] = s }
+                if pending.count >= 25 { flush() }
+                if let n = it.next() { group.addTask { [service] in try? await service.collectionStats(db: db, collection: n) } }
+            }
+        }
+        flush()
     }
 
     func stat(_ db: String, _ coll: String) -> CollectionInfo? { stats["\(db).\(coll)"] }
