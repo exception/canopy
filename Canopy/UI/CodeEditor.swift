@@ -12,6 +12,10 @@ struct CodeEditor: NSViewRepresentable {
     var focusOnAppear = false
     var onSubmit: (() -> Void)? = nil
     var onHeight: ((CGFloat) -> Void)? = nil
+    /// Suggestions for the text and caret position; shown in a popup as you type.
+    var completer: ((String, Int) -> CompletionResult?)? = nil
+    /// Single-line fields center their first line in this height.
+    static let singleLineHeight: CGFloat = 30
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -34,8 +38,10 @@ struct CodeEditor: NSViewRepresentable {
         tv.isAutomaticSpellingCorrectionEnabled = false
         tv.isContinuousSpellCheckingEnabled = false
         tv.smartInsertDeleteEnabled = false
-        tv.textContainerInset = NSSize(width: 2, height: singleLine ? 4 : 6)
-        tv.font = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        tv.font = font
+        let lineHeight = NSLayoutManager().defaultLineHeight(for: font)
+        tv.textContainerInset = NSSize(width: 2, height: singleLine ? max(2, ((Self.singleLineHeight - lineHeight) / 2).rounded(.down)) : 6)
         tv.insertionPointColor = Theme.accent
         tv.placeholder = placeholder
         tv.isVerticallyResizable = true
@@ -60,12 +66,42 @@ struct CodeEditor: NSViewRepresentable {
         if tv.string != text { context.coordinator.apply(text) } else { context.coordinator.reportHeight() }
     }
 
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CodeEditor
         weak var textView: CodeTextView?
         private var applying = false
 
         init(_ p: CodeEditor) { parent = p }
+
+        lazy var popup: CompletionPopup = {
+            let p = CompletionPopup()
+            p.model.onPick = { [weak self] i in self?.accept(i) }
+            return p
+        }()
+
+        func updateCompletions() {
+            guard let tv = textView, let completer = parent.completer, tv.window?.firstResponder === tv else { return hideCompletions() }
+            let sel = tv.selectedRange()
+            guard sel.length == 0, let r = completer(tv.string, sel.location) else { return hideCompletions() }
+            popup.show(r, in: tv)
+        }
+
+        func hideCompletions() { if parent.completer != nil { popup.hide() } }
+
+        func accept(_ i: Int) {
+            guard let tv = textView, popup.isVisible, popup.model.items.indices.contains(i) else { return }
+            let r = popup.range
+            let item = popup.model.items[i]
+            popup.hide()
+            guard NSMaxRange(r) <= (tv.string as NSString).length else { return }
+            var insert = item.insert
+            // Don't double up a ": " that is already there.
+            if insert.hasSuffix(": ") {
+                let rest = (tv.string as NSString).substring(from: NSMaxRange(r)).drop { $0 == " " }
+                if rest.hasPrefix(":") { insert.removeLast(2) }
+            }
+            tv.insertText(insert, replacementRange: r)
+        }
 
         func apply(_ s: String) {
             guard let tv = textView else { return }
@@ -97,9 +133,27 @@ struct CodeEditor: NSViewRepresentable {
             }
             tv.textStorage?.endEditing()
             reportHeight()
+            if parent.completer != nil { updateCompletions() }
+        }
+
+        func textViewDidChangeSelection(_ n: Notification) {
+            guard popup.isVisible, let tv = textView else { return }
+            let sel = tv.selectedRange()
+            if sel.length > 0 || sel.location < popup.range.location || sel.location > NSMaxRange(popup.range) + 1 { popup.hide() }
         }
 
         func textView(_ tv: NSTextView, doCommandBy sel: Selector) -> Bool {
+            if parent.completer != nil, popup.isVisible {
+                switch sel {
+                case #selector(NSResponder.moveDown(_:)): popup.move(1); return true
+                case #selector(NSResponder.moveUp(_:)): popup.move(-1); return true
+                case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertNewline(_:)):
+                    if !(NSApp.currentEvent?.modifierFlags ?? []).contains(.command) { accept(popup.model.selected); return true }
+                    popup.hide()
+                case #selector(NSResponder.cancelOperation(_:)): popup.hide(); return true
+                default: popup.hide()
+                }
+            }
             if sel == #selector(NSResponder.insertNewline(_:)) {
                 let flags = NSApp.currentEvent?.modifierFlags ?? []
                 if flags.contains(.command) || (parent.singleLine && !flags.contains(.shift)) {
@@ -149,6 +203,17 @@ struct CodeEditor: NSViewRepresentable {
 final class CodeTextView: NSTextView {
     weak var coordinator: CodeEditor.Coordinator?
     var placeholder = "" { didSet { needsDisplay = true } }
+
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok { coordinator?.hideCompletions() }
+        return ok
+    }
+
+    override func viewWillMove(toWindow w: NSWindow?) {
+        if w == nil { coordinator?.hideCompletions() }
+        super.viewWillMove(toWindow: w)
+    }
 
     override func draw(_ rect: NSRect) {
         super.draw(rect)

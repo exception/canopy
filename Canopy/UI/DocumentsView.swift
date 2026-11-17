@@ -84,7 +84,9 @@ struct QueryBar: View {
             AskBar(text: $m.askText, placeholder: "Ask for data in plain words — e.g. \u{201C}refunded orders over 100k from Rosario this month\u{201D}",
                    busy: m.askBusy, note: m.askNote, error: m.askError) { Task { await AIActions.ask(m) } }
             HStack(alignment: .top, spacing: 8) {
-                QueryField(label: "Filter", text: $m.filterText, placeholder: "{ field: \"value\" }", error: m.filterError) { Task { await m.run() } }
+                QueryField(label: "Filter", text: $m.filterText, placeholder: "{ field: \"value\" }", error: m.filterError,
+                           completer: { m.catalog.isEmpty ? nil : QueryCompletion.complete($0, cursor: $1, catalog: m.catalog, operators: true) }) { Task { await m.run() } }
+                PresetsButton(m: m)
                 Button { withAnimation(.snappy(duration: 0.18)) { m.showOptions.toggle() } } label: {
                     Image(systemName: "slider.horizontal.3").font(.system(size: 12))
                         .foregroundStyle(m.showOptions || !m.sortText.isEmpty || !m.projectText.isEmpty ? Color.cAccent : Color.cText2)
@@ -112,8 +114,10 @@ struct QueryBar: View {
             }
             if m.showOptions {
                 HStack(alignment: .top, spacing: 8) {
-                    QueryField(label: "Project", text: $m.projectText, placeholder: "{ name: 1, email: 1 }", error: nil) { Task { await m.run() } }
-                    QueryField(label: "Sort", text: $m.sortText, placeholder: "{ createdAt: -1 }", error: nil) { Task { await m.run() } }
+                    QueryField(label: "Project", text: $m.projectText, placeholder: "{ name: 1, email: 1 }", error: nil,
+                               completer: { m.catalog.isEmpty ? nil : QueryCompletion.complete($0, cursor: $1, catalog: m.catalog, operators: false) }) { Task { await m.run() } }
+                    QueryField(label: "Sort", text: $m.sortText, placeholder: "{ createdAt: -1 }", error: nil,
+                               completer: { m.catalog.isEmpty ? nil : QueryCompletion.complete($0, cursor: $1, catalog: m.catalog, operators: false) }) { Task { await m.run() } }
                     HStack(spacing: 6) {
                         Text("Limit").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.cText3)
                         Picker("", selection: $m.limit) { ForEach([20, 50, 100, 250, 500, 1000], id: \.self) { Text("\($0)").tag($0) } }
@@ -135,17 +139,19 @@ struct QueryField: View {
     @Binding var text: String
     var placeholder: String
     var error: String?
+    var completer: ((String, Int) -> CompletionResult?)? = nil
     var onSubmit: () -> Void
-    @State private var height: CGFloat = 28
+    @State private var height: CGFloat = CodeEditor.singleLineHeight
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
+            // Centered on the first line, so it stays put when the field grows.
             Text(label).font(.system(size: 11, weight: .semibold)).foregroundStyle(error != nil ? Color.cRed : Color.cText3)
-                .frame(width: 52, alignment: .leading).padding(.leading, 10).padding(.top, 8)
+                .frame(width: 52, height: CodeEditor.singleLineHeight, alignment: .leading).padding(.leading, 10)
             CodeEditor(text: $text, placeholder: placeholder, singleLine: true, onSubmit: onSubmit, onHeight: { h in
-                let c = min(max(h, 28), 160)
+                let c = min(max(h, CodeEditor.singleLineHeight), 160)
                 if abs(c - height) > 0.5 { height = c }
-            })
+            }, completer: completer)
                 .frame(height: height)
         }
         .background(Color.cField, in: RoundedRectangle(cornerRadius: 7, style: .continuous))

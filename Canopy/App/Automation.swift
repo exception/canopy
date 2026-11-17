@@ -177,6 +177,15 @@ enum Automation {
             app.currentTab?.docs.showOptions = true
             await app.currentTab?.docs.run()
             return "ok"
+        case "presets-snapshot":
+            guard let m = app.currentTab?.docs else { return "error" }
+            let v = NSHostingView(rootView: PresetsPanel(m: m, maxHeight: 2000))
+            v.appearance = NSApp.effectiveAppearance
+            v.frame.size = v.fittingSize
+            v.layoutSubtreeIfNeeded()
+            guard let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return "error" }
+            v.cacheDisplay(in: v.bounds, to: rep)
+            return (try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: arg))) != nil ? "ok" : "error"
         case "select":
             app.currentTab?.docs.selected = Int(arg)
             return "ok"

@@ -77,6 +77,8 @@ final class DocumentsModel {
     var selected: Int?
     var hasRun = false
     var lastQuery = FindQuery()
+    /// Fields seen so far, for autocomplete and presets.
+    var catalog = FieldCatalog()
 
     // Inline editing
     var editing: Int?          // index in docs, or -1 for a new document
@@ -145,6 +147,7 @@ final class DocumentsModel {
             if editing != nil && editing != -1 { editing = nil } // the row being edited may be gone
             docs = r.documents
             elapsed = r.elapsed
+            if !docs.isEmpty { catalog = FieldCatalog.build(docs).merged(over: catalog) }
             lastQuery = q
             if selected.map({ $0 >= docs.count }) ?? false { selected = nil }
             if resetPage {
@@ -269,6 +272,13 @@ final class DocumentsModel {
         var f = (try? ShellParser.parseDocument(filterText)) ?? BDoc()
         f[path] = value
         filterText = BFormat.text(f, pretty: false)
+        await run()
+    }
+
+    func applyPreset(_ preset: QueryPreset) async {
+        let p = preset.resolved()
+        if let f = p.filter { filterText = f }
+        if let s = p.sort { sortText = s; showOptions = true }
         await run()
     }
 
