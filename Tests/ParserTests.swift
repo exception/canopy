@@ -79,10 +79,10 @@ final class ParserTests: XCTestCase {
     }
 
     func testConnectionStringPasswordSplit() {
-        let (u, p) = ConnectionString.split("mongodb+srv://erik:p%40ss@cluster.example.net/app?retryWrites=true")
-        XCTAssertEqual(u, "mongodb+srv://erik@cluster.example.net/app?retryWrites=true")
+        let (u, p) = ConnectionString.split("mongodb+srv://app:p%40ss@cluster.example.net/app?retryWrites=true")
+        XCTAssertEqual(u, "mongodb+srv://app@cluster.example.net/app?retryWrites=true")
         XCTAssertEqual(p, "p@ss")
-        XCTAssertEqual(ConnectionString.join(u, password: p), "mongodb+srv://erik:p%40ss@cluster.example.net/app?retryWrites=true")
+        XCTAssertEqual(ConnectionString.join(u, password: p), "mongodb+srv://app:p%40ss@cluster.example.net/app?retryWrites=true")
     }
 
     func testFuzzy() {
