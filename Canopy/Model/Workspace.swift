@@ -83,6 +83,13 @@ final class DocumentsModel {
     var editText = ""
     var editError: String?
 
+    // Live change stream
+    var live = false
+    var events: [ChangeEvent] = []
+    var liveError: String?
+    var newSinceRun = 0
+    private var liveTask: Task<Void, Never>?
+
     // AI
     var askText = ""
     var askBusy = false
@@ -124,6 +131,7 @@ final class DocumentsModel {
         do { q = try buildQuery() } catch { self.error = error.localizedDescription; return }
         loading = true
         error = nil
+        newSinceRun = 0
         defer { loading = false; hasRun = true }
         do {
             let r = try await session.service.find(db: db, collection: collection, query: q)
@@ -210,6 +218,41 @@ final class DocumentsModel {
             selected = nil
             Task { await session.refreshStat(db, collection) }
         } catch { self.error = error.localizedDescription }
+    }
+
+    func toggleLive() {
+        if live { stopLive(); return }
+        live = true
+        liveError = nil
+        let stream = session.service.watch(db: db, collection: collection)
+        liveTask = Task {
+            do {
+                for try await e in stream {
+                    events.insert(ChangeEvent(e), at: 0)
+                    newSinceRun += 1
+                    if events.count > 300 { events.removeLast() }
+                    if total != nil, e["operationType"] == .string("insert") { total! += 1 }
+                    if e["operationType"] == .string("delete") { total = total.map { $0 - 1 } }
+                }
+            } catch {
+                liveError = error.localizedDescription
+            }
+            live = false
+        }
+    }
+
+    func stopLive() {
+        liveTask?.cancel()
+        liveTask = nil
+        live = false
+    }
+
+    /// Adds `path: value` to the current filter and runs it.
+    func addFilter(path: String, value: BValue) async {
+        var f = (try? ShellParser.parseDocument(filterText)) ?? BDoc()
+        f[path] = value
+        filterText = BFormat.text(f, pretty: false)
+        await run()
     }
 
     func apply(filter: String?, sort: String?, project: String?) {
@@ -557,4 +600,22 @@ final class History {
     }
 
     func entries(for ns: String) -> [HistoryEntry] { entries.filter { $0.namespace == ns } }
+}
+
+struct ChangeEvent: Identifiable {
+    let id = UUID()
+    let op: String
+    let at: Date
+    let key: BValue?
+    let fields: [String]
+    let doc: BDoc?
+
+    init(_ e: BDoc) {
+        op = e["operationType"]?.stringValue ?? "?"
+        if case .timestamp(let t, _) = e["clusterTime"] { at = Date(timeIntervalSince1970: TimeInterval(t)) } else { at = Date() }
+        key = e["documentKey"]?.doc?["_id"]
+        let upd = e["updateDescription"]?.doc
+        fields = (upd?["updatedFields"]?.doc?.keys ?? []) + (upd?["removedFields"]?.arrayValue?.compactMap(\.stringValue).map { "−" + $0 } ?? [])
+        doc = e["fullDocument"]?.doc
+    }
 }

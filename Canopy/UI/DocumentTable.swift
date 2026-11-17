@@ -29,6 +29,9 @@ struct DocumentTable: NSViewRepresentable {
         tv.delegate = context.coordinator
         tv.target = context.coordinator
         tv.doubleAction = #selector(Coordinator.doubleClick(_:))
+        let menu = NSMenu()
+        menu.delegate = context.coordinator
+        tv.menu = menu
         scroll.documentView = tv
         context.coordinator.table = tv
         context.coordinator.reload()
@@ -40,7 +43,7 @@ struct DocumentTable: NSViewRepresentable {
         context.coordinator.reload()
     }
 
-    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
         var m: DocumentsModel
         weak var table: NSTableView?
         private var shownDocs: [BDoc] = []
@@ -128,6 +131,33 @@ struct DocumentTable: NSViewRepresentable {
             guard let t = table else { return }
             let r = t.selectedRow
             Task { @MainActor in self.m.selected = r >= 0 ? r : nil }
+        }
+
+        func menuNeedsUpdate(_ menu: NSMenu) {
+            menu.removeAllItems()
+            guard let t = table, t.clickedRow >= 0, t.clickedColumn > 0 else { return }
+            let col = t.tableColumns[t.clickedColumn].identifier.rawValue
+            guard let v = shownDocs[t.clickedRow][col] else { return }
+            let target = (col, v)
+            if !v.isContainer {
+                let f = NSMenuItem(title: "Filter where \(col) = \(BFormat.preview(v, max: 40))", action: #selector(filterBy(_:)), keyEquivalent: "")
+                f.target = self; f.representedObject = target
+                menu.addItem(f)
+            }
+            let c = NSMenuItem(title: "Copy value", action: #selector(copyValue(_:)), keyEquivalent: "")
+            c.target = self; c.representedObject = target
+            menu.addItem(c)
+        }
+
+        @objc func filterBy(_ item: NSMenuItem) {
+            guard let (col, v) = item.representedObject as? (String, BValue) else { return }
+            Task { @MainActor in await self.m.addFilter(path: col, value: v) }
+        }
+
+        @objc func copyValue(_ item: NSMenuItem) {
+            guard let (_, v) = item.representedObject as? (String, BValue) else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(v.isContainer ? BFormat.text(v) : BFormat.preview(v, max: 1_000_000), forType: .string)
         }
 
         @objc func doubleClick(_ sender: Any?) {

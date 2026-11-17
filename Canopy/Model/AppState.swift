@@ -101,6 +101,7 @@ final class AppState {
 
     func close(_ id: UUID) {
         guard let i = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabs[i].docs.stopLive()
         tabs.remove(at: i)
         if currentTabID == id { currentTabID = tabs.indices.contains(i) ? tabs[i].id : tabs.last?.id }
     }

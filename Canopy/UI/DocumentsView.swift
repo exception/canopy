@@ -11,7 +11,10 @@ struct DocumentsView: View {
             ResultsToolbar(m: m)
             HStack(spacing: 0) {
                 results
-                if m.editing != nil || (app.showInspector && m.selected != nil && m.view != .list) {
+                if m.live || !m.events.isEmpty {
+                    Rectangle().fill(Color.cHairline).frame(width: 1)
+                    LivePanel(m: m).frame(width: 330)
+                } else if m.editing != nil || (app.showInspector && m.selected != nil && m.view != .list) {
                     Rectangle().fill(Color.cHairline).frame(width: 1)
                     DocumentInspector(m: m).frame(width: 400)
                 }
@@ -204,6 +207,26 @@ struct ResultsToolbar: View {
                 Task { await tab.explain.run(query: q, label: m.filterText.isEmpty ? "{}" : m.filterText) }
             } label: { Label("Explain", systemImage: "gauge.with.dots.needle.33percent").font(.system(size: 12)) }
                 .buttonStyle(.borderless)
+            Button { m.toggleLive() } label: {
+                HStack(spacing: 5) {
+                    Circle().fill(m.live ? Color.cRed : Color.cText3).frame(width: 7, height: 7)
+                        .shadow(color: m.live ? Color.cRed : .clear, radius: 4)
+                        .symbolEffect(.pulse, isActive: m.live)
+                    Text(m.live ? "Live" : "Watch").font(.system(size: 12, weight: m.live ? .semibold : .regular))
+                }
+                .foregroundStyle(m.live ? Color.cRed : Color.cText2)
+            }
+            .buttonStyle(.borderless)
+            .help(m.session.service.isReplicaSet ? "Tail changes to this collection as they happen" : "Change streams need a replica set")
+            if m.newSinceRun > 0 {
+                Button { Task { await m.run(resetPage: false) } } label: {
+                    Label("\(m.newSinceRun) change\(m.newSinceRun == 1 ? "" : "s") · refresh", systemImage: "arrow.clockwise")
+                        .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 9).frame(height: 22).background(Color.cAccent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .transition(.scale.combined(with: .opacity))
+            }
             Spacer()
             if m.loading { ProgressView().controlSize(.small) }
             if m.hasRun && m.error == nil {
@@ -256,7 +279,7 @@ struct DocumentCard: View {
     var body: some View {
         let selected = m.selected == index
         VStack(alignment: .leading, spacing: 0) {
-            DocTree(doc: doc, expandAll: expandAll, maxTopLevel: 14)
+            DocTree(doc: doc, expandAll: expandAll, maxTopLevel: 14, onFilter: { p, v in Task { await m.addFilter(path: p, value: v) } })
                 .padding(.horizontal, 12).padding(.vertical, 10)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -334,13 +357,14 @@ struct DocTree: View {
     let doc: BDoc
     var expandAll = false
     var maxTopLevel = 1000
+    var onFilter: ((String, BValue) -> Void)? = nil
     @State private var showAll = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             let fields = showAll ? doc.fields : Array(doc.fields.prefix(maxTopLevel))
             ForEach(Array(fields.enumerated()), id: \.offset) { _, f in
-                TreeRow(key: f.key, value: f.value, depth: 0, expandAll: expandAll)
+                TreeRow(key: f.key, path: f.key, value: f.value, depth: 0, expandAll: expandAll, onFilter: onFilter)
             }
             if !showAll && doc.count > maxTopLevel {
                 Button("Show \(doc.count - maxTopLevel) more fields") { showAll = true }
@@ -351,10 +375,13 @@ struct DocTree: View {
 }
 
 struct TreeRow: View {
+    @Environment(AppState.self) private var app
     let key: String
+    let path: String
     let value: BValue
     let depth: Int
     var expandAll: Bool
+    var onFilter: ((String, BValue) -> Void)? = nil
     @State private var open: Bool?
 
     var body: some View {
@@ -374,12 +401,26 @@ struct TreeRow: View {
             .padding(.leading, CGFloat(depth) * 16)
             .contentShape(Rectangle())
             .onTapGesture { if value.isContainer { withAnimation(.snappy(duration: 0.15)) { open = !isOpen } } }
+            .contextMenu {
+                if !value.isContainer, let onFilter {
+                    Button("Filter where \(path) = \(BFormat.preview(value, max: 40))") { onFilter(path, value) }
+                    if let n = value.number {
+                        Button("Filter where \(path) ≥ \(BFormat.number(n))") { onFilter(path, .document(["$gte": value])) }
+                        Button("Filter where \(path) ≤ \(BFormat.number(n))") { onFilter(path, .document(["$lte": value])) }
+                    }
+                    if case .date = value { Button("Filter where \(path) after this") { onFilter(path, .document(["$gt": value])) } }
+                    Button("Filter where \(path) exists") { onFilter(path, .document(["$exists": true])) }
+                    Divider()
+                }
+                Button("Copy value") { app.copy(value.isContainer ? BFormat.text(value) : BFormat.preview(value, max: 1_000_000)) }
+                Button("Copy path") { app.copy(path) }
+            }
             if isOpen {
                 switch value {
                 case .document(let d):
-                    ForEach(Array(d.fields.enumerated()), id: \.offset) { _, f in TreeRow(key: f.key, value: f.value, depth: depth + 1, expandAll: expandAll) }
+                    ForEach(Array(d.fields.enumerated()), id: \.offset) { _, f in TreeRow(key: f.key, path: path + "." + f.key, value: f.value, depth: depth + 1, expandAll: expandAll, onFilter: onFilter) }
                 case .array(let a):
-                    ForEach(Array(a.prefix(200).enumerated()), id: \.offset) { i, v in TreeRow(key: "\(i)", value: v, depth: depth + 1, expandAll: expandAll) }
+                    ForEach(Array(a.prefix(200).enumerated()), id: \.offset) { i, v in TreeRow(key: "\(i)", path: v.isContainer ? path + ".\(i)" : path, value: v, depth: depth + 1, expandAll: expandAll, onFilter: onFilter) }
                 default: EmptyView()
                 }
             }
@@ -422,7 +463,7 @@ struct DocumentInspector: View {
                 }
                 .padding(.horizontal, 12).frame(height: 38)
                 Divider()
-                ScrollView { DocTree(doc: d, expandAll: true).padding(12) }
+                ScrollView { DocTree(doc: d, expandAll: true, onFilter: { p, v in Task { await m.addFilter(path: p, value: v) } }).padding(12) }
             }
         }
         .background(Color.cPanel)
@@ -451,5 +492,71 @@ enum Export {
         let p = NSSavePanel()
         p.nameFieldStringValue = name
         if p.runModal() == .OK, let url = p.url { try? text.write(to: url, atomically: true, encoding: .utf8) }
+    }
+}
+
+// MARK: - Live
+
+struct LivePanel: View {
+    @Bindable var m: DocumentsModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Circle().fill(m.live ? Color.cRed : Color.cText3).frame(width: 8, height: 8).symbolEffect(.pulse, isActive: m.live)
+                Text(m.live ? "Live changes" : "Changes (paused)").font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text("\(m.events.count)").font(.system(size: 11).monospacedDigit()).foregroundStyle(Color.cText3)
+                Button(m.live ? "Pause" : "Resume") { m.toggleLive() }.buttonStyle(.borderless).font(.system(size: 11.5))
+                Button { m.stopLive(); m.events = [] } label: { Image(systemName: "xmark") }.buttonStyle(.borderless)
+            }
+            .padding(.horizontal, 12).frame(height: 38)
+            Divider()
+            if let e = m.liveError {
+                Text(e).font(.system(size: 11.5)).foregroundStyle(Color.cRed).padding(12)
+            }
+            if m.events.isEmpty && m.liveError == nil {
+                VStack(spacing: 6) {
+                    Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 22, weight: .light)).foregroundStyle(Color.cText3)
+                    Text("Waiting for inserts, updates and deletes…").font(.system(size: 12)).foregroundStyle(Color.cText3)
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(m.events) { e in LiveRow(e: e).transition(.move(edge: .top).combined(with: .opacity)) }
+                    }
+                    .padding(10)
+                    .animation(.snappy(duration: 0.25), value: m.events.first?.id)
+                }
+            }
+        }
+        .background(Color.cPanel)
+    }
+}
+
+struct LiveRow: View {
+    let e: ChangeEvent
+    var color: Color {
+        switch e.op { case "insert": return .cAccent; case "update", "replace": return .cAmber; case "delete": return .cRed; default: return .cText3 }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(e.op.uppercased()).font(.system(size: 9.5, weight: .bold)).foregroundStyle(color)
+                    .padding(.horizontal, 6).padding(.vertical, 2).background(color.opacity(0.14), in: Capsule())
+                Text(e.key.map { BFormat.preview($0) } ?? "").font(.system(size: 10.5, design: .monospaced)).foregroundStyle(Color.cText3).lineLimit(1)
+                Spacer()
+                Text(e.at, style: .time).font(.system(size: 10.5).monospacedDigit()).foregroundStyle(Color.cText3)
+            }
+            if !e.fields.isEmpty {
+                Text(e.fields.joined(separator: ", ")).font(.system(size: 11, design: .monospaced)).foregroundStyle(Color(ns: Theme.synKey)).lineLimit(2)
+            }
+            if let d = e.doc {
+                Text(BFormat.text(d, pretty: false)).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(Color.cText2).lineLimit(3)
+            }
+        }
+        .padding(9)
+        .background(Color.cRaised, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.cHairline))
     }
 }

@@ -147,6 +147,9 @@ enum Automation {
             guard let t = app.currentTab else { return "no tab" }
             await AIActions.suggestIndexes(t.indexes)
             return "ok"
+        case "live":
+            app.currentTab?.docs.toggleLive()
+            return "ok"
         case "expand":
             app.currentTab?.schema.expanded = arg
             return "ok"

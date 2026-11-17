@@ -59,7 +59,8 @@ struct CommandPalette: View {
                 }
             }
             .frame(width: 620)
-            .canopyGlass(cornerRadius: 14)
+            .background(Color.cRaised, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color(ns: Theme.strongHairline)))
             .shadow(color: .black.opacity(0.35), radius: 30, y: 12)
             .padding(.top, 90)
         }

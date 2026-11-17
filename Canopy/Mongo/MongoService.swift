@@ -244,6 +244,38 @@ final class MongoService: @unchecked Sendable {
         return try await command(BDoc([("explain", .document(inner)), ("verbosity", .string("executionStats"))]), db: db)
     }
 
+    // MARK: Change streams
+
+    /// Tails a collection's change stream until cancelled.
+    func watch(db: String, collection: String) -> AsyncThrowingStream<BDoc, Error> {
+        AsyncThrowingStream { cont in
+            let task = Task {
+                var id: BValue = .int64(0)
+                do {
+                    let first = try await command(BDoc([
+                        ("aggregate", .string(collection)),
+                        ("pipeline", .array([.document(["$changeStream": .document(["fullDocument": "updateLookup"])])])),
+                        ("cursor", .document(BDoc())),
+                    ]), db: db)
+                    let cur = first["cursor"]?.doc ?? BDoc()
+                    for d in (cur["firstBatch"]?.arrayValue ?? []).compactMap(\.doc) { cont.yield(d) }
+                    id = cur["id"] ?? .int64(0)
+                    while !Task.isCancelled, id.number ?? 0 != 0 {
+                        let more = try await command(BDoc([("getMore", id), ("collection", .string(collection)), ("maxTimeMS", .int32(1000))]), db: db)
+                        let c = more["cursor"]?.doc ?? BDoc()
+                        for d in (c["nextBatch"]?.arrayValue ?? []).compactMap(\.doc) { cont.yield(d) }
+                        id = c["id"] ?? .int64(0)
+                    }
+                    cont.finish()
+                } catch {
+                    cont.finish(throwing: error)
+                }
+                if id.number ?? 0 != 0 { _ = try? await self.command(BDoc([("killCursors", .string(collection)), ("cursors", .array([id]))]), db: db) }
+            }
+            cont.onTermination = { _ in task.cancel() }
+        }
+    }
+
     // MARK: Indexes
 
     func indexes(db: String, collection: String) async throws -> [IndexInfo] {

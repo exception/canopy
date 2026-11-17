@@ -38,7 +38,9 @@ struct RootView: View {
         .overlay(alignment: .bottom) {
             if let t = app.toast {
                 Text(t).font(.system(size: 12, weight: .medium)).padding(.horizontal, 14).padding(.vertical, 8)
-                    .canopyGlass(cornerRadius: 10).padding(.bottom, 24).transition(.move(edge: .bottom).combined(with: .opacity))
+                    .background(Color.cRaised, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color(ns: Theme.strongHairline)))
+                    .shadow(color: .black.opacity(0.2), radius: 12, y: 4).padding(.bottom, 24).transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .animation(.snappy(duration: 0.22), value: app.showCopilot)
