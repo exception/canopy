@@ -31,6 +31,9 @@ OUT=build/release
 DD=build/rel
 APP=$DD/Build/Products/Release/Canopy.app
 NOTARY_PROFILE=${NOTARY_PROFILE:-canopy-notary}
+# Same Apple team as Pitwall: reuse its notary profile when Canopy has none of its own.
+if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 \
+   && xcrun notarytool history --keychain-profile pitwall-notary >/dev/null 2>&1; then NOTARY_PROFILE=pitwall-notary; fi
 SIGN_ID=${SIGN_ID:-$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/{print $2; exit}')}
 SIGN_ID=${SIGN_ID:--}
 
@@ -45,6 +48,10 @@ xcodebuild -project Canopy.xcodeproj -scheme Canopy -configuration Release -deri
 
 echo "==> Signing"
 TS=(); [[ $SIGN_ID != "-" ]] && TS=(--timestamp)
+# Loose dylibs Xcode embeds (e.g. libswiftCompatibilitySpan) need the Developer ID too.
+for lib in $APP/Contents/Frameworks/*.dylib(N); do
+  codesign --force --sign "$SIGN_ID" --options runtime $TS "$lib"
+done
 # Sparkle's helpers are nested code: sign them inside-out before the app.
 SPK=$APP/Contents/Frameworks/Sparkle.framework/Versions/B
 codesign --force --sign "$SIGN_ID" --options runtime $TS "$SPK/XPCServices/Installer.xpc"
@@ -145,7 +152,13 @@ echo "==> $OUT/appcast.xml"
 
 if (( PUBLISH )); then
   echo "==> Publishing v$VERSION"
-  gh release create v$VERSION $DMG $OUT/appcast.xml -R $REPO --title "Canopy $VERSION" --notes-file $NOTES
+  if gh release view v$VERSION -R $REPO >/dev/null 2>&1; then
+    # Re-running a version (e.g. after fixing signing) replaces its files instead of failing.
+    gh release upload v$VERSION $DMG $OUT/appcast.xml -R $REPO --clobber
+    gh release edit v$VERSION -R $REPO --notes-file $NOTES
+  else
+    gh release create v$VERSION $DMG $OUT/appcast.xml -R $REPO --title "Canopy $VERSION" --notes-file $NOTES
+  fi
 else
   echo "    Publish with: gh release create v$VERSION $DMG $OUT/appcast.xml -R $REPO --title \"Canopy $VERSION\" --notes-file <notes.md>"
 fi
