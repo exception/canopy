@@ -224,6 +224,10 @@ enum Automation {
         case "new-connection":
             app.editingConnection = SavedConnection(name: "", uri: arg.isEmpty ? "mongodb://localhost:27017" : arg)
             return "ok"
+        case "close-sheet":
+            app.currentTab?.docs.bulk = nil
+            app.editingConnection = nil
+            return "ok"
         case "live":
             app.currentTab?.docs.toggleLive()
             return "ok"

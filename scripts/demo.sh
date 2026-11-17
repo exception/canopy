@@ -20,7 +20,12 @@ $c explain-ai; $c sleep 3500
 $c askpipe "monthly revenue for delivered orders, split by payment method"; $c sleep 3000
 $c copilot "Which payment methods have the highest refund rate? Give me a pipeline I can apply."; $c sleep 3500
 $c apply-proposal; $c sleep 3000
-$c copilot-open off; $c open analytics events; $c sort "{ts: -1}"; $c live; $c sleep 600
+$c copilot-open off; $c open shop customers schema; $c sleep 2500
+$c expand address.location; $c sleep 3000
+$c validator-ai; $c sleep 3500
+$c open shop orders; $c mode documents; $c sleep 600
+$c bulk-ai "cancel processing orders that haven't been updated in 45 days"; $c sleep 3500
+$c close-sheet; $c open analytics events; $c sort "{ts: -1}"; $c live; $c sleep 600
 mongosh --quiet $URI --eval 'var N=12' scripts/traffic.js >/dev/null &
 $c sleep 7000
 $c palette on; $c sleep 1500; $c palette off; $c sleep 500

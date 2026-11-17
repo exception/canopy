@@ -31,21 +31,25 @@ MongoDB Compass is an Electron app: slow to start, heavy to scroll, no real dark
 - **Documents** as a list (expandable tree), a native table, or raw JSON. Edit inline, clone, delete, insert. Right-click any value to filter by it.
 - **Query bar** that understands what people type: mongosh syntax, Extended JSON, unquoted keys, `ObjectId()`, `ISODate()`, `/regex/i`, comments, trailing commas. Errors point to the line and column.
 - **Bulk update and delete** with a live match count and sample before anything runs. Describe the change ("cancel processing orders not updated in 45 days") and Claude writes the filter and `$set`.
-- **Schema** analysis from a sample: every field path, its types, presence, top values, histograms for numbers and dates, mixed-type warnings. Click a value to filter by it. "Review with Claude" flags data-quality issues.
+- **Schema** analysis from a sample: every field path, its types, presence, top values, histograms for numbers and dates, a map for GeoJSON points, mixed-type warnings. Click a value to filter by it. "Review with Claude" flags data-quality issues, and "Generate validator" writes a `$jsonSchema` you can apply with `collMod` (warn or error, moderate or strict).
+- **Import** by dropping a JSON array, NDJSON or CSV file onto a collection (dotted CSV headers become nested fields).
+- **Keyboard first:** `⌘K` palette, `⌘L` ask, `⌘↩` run, `⌘E` explain, `⌘1`–`⌘5` switch views, `↑`/`↓` through documents, `↩` to edit, `⌘C` to copy.
 - **Indexes** with sizes and real usage counts (`$indexStats`), create and drop, and index suggestions from the queries you actually ran.
 - **Live** mode tails the collection's change stream: inserts, updates (with changed fields) and deletes as they happen.
 - **Server overview** with live operations per second, connections, memory, database sizes and running operations (with Kill).
 - **Command palette** (`⌘K`) to jump to any collection or action, tabs, query history with favorites, CSV/JSON export.
 - **Connections** with passwords in the Keychain, color tags, and a **read-only** switch that blocks writes, drops and `$out` from the app.
 
+<p align="center"><img alt="Bulk update written by Claude, with a match count before it runs" src="docs/images/bulk.png" width="85%"></p>
 <p align="center"><img alt="Live change stream panel" src="docs/images/live.png" width="85%"></p>
+<p align="center"><img alt="A $jsonSchema validator generated from the sampled schema" src="docs/images/validator.png" width="85%"></p>
 <p align="center"><img alt="Schema analysis in light mode" src="docs/images/schema-light.png" width="85%"></p>
 
 ## How Claude is wired in
 
 Canopy runs Claude through your existing [Claude Code](https://claude.com/code) install (`claude -p`), so there's no API key to paste: it uses your login. One-shot features (query bar, pipelines, bulk updates, schema and explain reviews, index suggestions) use structured output. The copilot streams a full agent turn and reaches the database through a tiny MCP server that Canopy runs on `127.0.0.1` with a random token in the path.
 
-That MCP server is read-only by construction: it exposes `find`, `aggregate` (with `$out` and `$merge` rejected), `count`, `collection_schema`, `list_*` and `explain`, plus `propose_query`, which only shows a card in the UI. Results are capped in size. Claude never gets write tools; writes always go through a confirmation in the app.
+That MCP server is read-only by construction (`aggregate` rejects `$out`/`$merge`, and the server itself rejects them inside `$facet`, `$lookup` and `$unionWith`): it exposes `find`, `aggregate` (with `$out` and `$merge` rejected), `count`, `collection_schema`, `list_*` and `explain`, plus `propose_query`, which only shows a card in the UI (proposals can't contain write stages either, and applying one never runs a write). Results are capped in size. Claude never gets write tools; writes always go through a confirmation in the app.
 
 Models are configurable in Settings (Opus for the copilot, Sonnet for quick actions by default).
 
@@ -59,7 +63,7 @@ xcodebuild -project Canopy.xcodeproj -scheme Canopy -configuration Debug -derive
 open build/dd/Build/Products/Debug/Canopy.app
 ```
 
-Tests: `xcodebuild -project Canopy.xcodeproj -scheme Canopy -derivedDataPath build/dd test` (parser, Extended JSON, Decimal128, BSON bridging, schema, connection strings).
+Tests: `xcodebuild -project Canopy.xcodeproj -scheme Canopy -derivedDataPath build/dd test` (parser, Extended JSON, Decimal128, BSON bridging, type preservation on edit, schema, CSV import, connection strings, MCP request parsing).
 
 ### Demo data and recordings
 
