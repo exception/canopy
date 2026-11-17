@@ -205,6 +205,10 @@ enum Automation {
             guard let t = app.currentTab else { return "no tab" }
             await AIActions.schemaInsight(t.schema)
             return "ok"
+        case "validator-ai":
+            guard let t = app.currentTab else { return "no tab" }
+            await AIActions.validator(t.schema)
+            return t.schema.validatorError ?? "ok"
         case "suggest-indexes":
             guard let t = app.currentTab else { return "no tab" }
             await AIActions.suggestIndexes(t.indexes)

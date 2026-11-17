@@ -68,29 +68,35 @@ enum ClaudeCLI {
     }
 
     private static func run(_ exe: String, _ args: [String]) async throws -> Data {
-        try await withCheckedThrowingContinuation { cont in
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: exe)
-            p.arguments = args
-            p.environment = environment()
-            p.currentDirectoryURL = workDir
-            let out = Pipe(), err = Pipe()
-            p.standardOutput = out
-            p.standardError = err
-            p.standardInput = FileHandle.nullDevice
-            var buf = Data()
-            out.fileHandleForReading.readabilityHandler = { h in buf.append(h.availableData) }
-            p.terminationHandler = { pr in
-                out.fileHandleForReading.readabilityHandler = nil
-                buf.append(out.fileHandleForReading.readDataToEndOfFile())
-                if pr.terminationStatus != 0 && buf.isEmpty {
-                    let e = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                    cont.resume(throwing: Failure(message: e.isEmpty ? "claude exited with \(pr.terminationStatus)" : e))
-                } else { cont.resume(returning: buf) }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: exe)
+        p.arguments = args
+        p.environment = environment()
+        p.currentDirectoryURL = workDir
+        let out = Pipe(), err = Pipe()
+        p.standardOutput = out
+        p.standardError = err
+        p.standardInput = FileHandle.nullDevice
+        try p.run()
+        return try await withCheckedThrowingContinuation { cont in
+            // Both pipes are drained to EOF on their own queues, so neither can fill up and stall the child.
+            DispatchQueue.global().async {
+                let errBox = ErrBox()
+                let g = DispatchGroup()
+                g.enter()
+                DispatchQueue.global().async { errBox.data = err.fileHandleForReading.readDataToEndOfFile(); g.leave() }
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+                g.wait()
+                if p.terminationStatus != 0 && data.isEmpty {
+                    let e = String(data: errBox.data, encoding: .utf8) ?? ""
+                    cont.resume(throwing: Failure(message: e.isEmpty ? "claude exited with \(p.terminationStatus)" : String(e.suffix(600))))
+                } else { cont.resume(returning: data) }
             }
-            do { try p.run() } catch { cont.resume(throwing: error) }
         }
     }
+
+    private final class ErrBox: @unchecked Sendable { var data = Data() }
 
     // MARK: Streaming agent
 
@@ -167,34 +173,41 @@ enum ClaudeCLI {
                 default: break
                 }
             }
-            out.fileHandleForReading.readabilityHandler = { h in
-                let d = h.availableData
-                if d.isEmpty { return }
-                pending.append(d)
-                while let nl = pending.firstIndex(of: 10) {
-                    let line = pending[pending.startIndex..<nl]
-                    pending.removeSubrange(pending.startIndex...nl)
-                    handleLine(Data(line))
-                }
-            }
-            p.terminationHandler = { pr in
-                out.fileHandleForReading.readabilityHandler = nil
-                if !pending.isEmpty { handleLine(pending) }
-                if !finished {
-                    let e = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                    cont.yield(.done(cost: nil, error: pr.terminationReason == .uncaughtSignal ? nil : (e.isEmpty ? "claude exited with \(pr.terminationStatus)" : String(e.suffix(600)))))
-                }
-                cont.finish()
-            }
             cont.onTermination = { _ in if p.isRunning { p.terminate() } }
             do { try p.run() } catch {
                 cont.yield(.done(cost: nil, error: error.localizedDescription))
+                cont.finish()
+                return
+            }
+            // One reader thread owns `pending`/`finished`: read stdout to EOF, then reap the process.
+            DispatchQueue.global().async {
+                let errBox = ErrBox()
+                let g = DispatchGroup()
+                g.enter()
+                DispatchQueue.global().async { errBox.data = err.fileHandleForReading.readDataToEndOfFile(); g.leave() }
+                let fh = out.fileHandleForReading
+                while true {
+                    let d = fh.availableData
+                    if d.isEmpty { break }
+                    pending.append(d)
+                    while let nl = pending.firstIndex(of: 10) {
+                        let line = pending[pending.startIndex..<nl]
+                        pending.removeSubrange(pending.startIndex...nl)
+                        handleLine(Data(line))
+                    }
+                }
+                if !pending.isEmpty { handleLine(pending) }
+                p.waitUntilExit()
+                g.wait()
+                if !finished {
+                    let e = String(data: errBox.data, encoding: .utf8) ?? ""
+                    cont.yield(.done(cost: nil, error: p.terminationReason == .uncaughtSignal ? nil : (e.isEmpty ? "claude exited with \(p.terminationStatus)" : String(e.suffix(600)))))
+                }
                 cont.finish()
             }
         }
     }
 }
-
 /// Prompts shared by the one-shot AI features.
 enum AIPrompts {
     static func today() -> String {

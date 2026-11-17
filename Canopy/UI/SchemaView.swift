@@ -1,4 +1,5 @@
 import Charts
+import MapKit
 import SwiftUI
 
 struct SchemaView: View {
@@ -25,6 +26,14 @@ struct SchemaView: View {
                 }
                 Spacer()
                 if m.report != nil {
+                    Button { Task { await AIActions.validator(m) } } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "checkmark.shield").symbolEffect(.pulse, isActive: m.validatorBusy)
+                            Text(m.validatorBusy ? "Writing…" : "Generate validator").font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundStyle(Color.cAI).padding(.horizontal, 11).frame(height: 28)
+                        .background(Color.cAI.opacity(0.1), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    }.buttonStyle(.plain).disabled(m.validatorBusy)
                     Button { Task { await AIActions.schemaInsight(m) } } label: {
                         HStack(spacing: 5) {
                             Image(systemName: "sparkles").symbolEffect(.pulse, isActive: m.insightBusy)
@@ -45,6 +54,7 @@ struct SchemaView: View {
                         if let insight = m.insight {
                             AIInsightCard(markdown: insight) { m.insight = nil }
                         }
+                        if m.validator != nil { ValidatorCard(m: m) }
                         VStack(spacing: 0) {
                             HStack {
                                 Text("FIELD").frame(maxWidth: .infinity, alignment: .leading)
@@ -181,7 +191,9 @@ struct FieldDetail: View {
                     }
                 }
             }
-            if !f.dates.isEmpty {
+            if !f.points.isEmpty {
+                GeoMap(points: f.points)
+            } else if !f.dates.isEmpty {
                 DateHistogram(dates: f.dates)
             } else if f.numbers.count > 5 && f.distinct > 12 {
                 NumberHistogram(values: f.numbers)
@@ -355,5 +367,76 @@ struct TableBlock: View {
         }
         .padding(10)
         .background(Color.cField, in: RoundedRectangle(cornerRadius: 7))
+    }
+}
+
+struct GeoMap: View {
+    let points: [(Double, Double)]
+    @State private var tick = 0
+
+    private var region: MKCoordinateRegion {
+        let lats = points.map(\.1), lngs = points.map(\.0)
+        let (minLat, maxLat, minLng, maxLng) = (lats.min()!, lats.max()!, lngs.min()!, lngs.max()!)
+        return MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2, longitude: (minLng + maxLng) / 2),
+                                  span: MKCoordinateSpan(latitudeDelta: max((maxLat - minLat) * 1.4, 0.5), longitudeDelta: max((maxLng - minLng) * 1.4, 0.5)))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            MapReader { proxy in
+                Map(initialPosition: .region(region))
+                    .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll))
+                    .onMapCameraChange(frequency: .continuous) { tick += 1 }
+                    .overlay {
+                        Canvas { ctx, _ in
+                            _ = tick
+                            for p in points.prefix(1500) {
+                                guard let pt = proxy.convert(CLLocationCoordinate2D(latitude: p.1, longitude: p.0), to: .local) else { continue }
+                                let r = CGRect(x: pt.x - 3.5, y: pt.y - 3.5, width: 7, height: 7)
+                                ctx.fill(Path(ellipseIn: r), with: .color(Color(ns: Theme.hex(0x3DD68C, 0.7))))
+                                ctx.stroke(Path(ellipseIn: r), with: .color(.white.opacity(0.55)), lineWidth: 0.6)
+                            }
+                        }
+                        .allowsHitTesting(false)
+                    }
+            }
+            .frame(height: 260)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            Text("\(Fmt.count(points.count)) points in the sample").font(.system(size: 11)).foregroundStyle(Color.cText3)
+        }
+        .frame(maxWidth: 620)
+    }
+}
+
+struct ValidatorCard: View {
+    @Environment(AppState.self) private var app
+    @Bindable var m: SchemaModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Suggested validator", systemImage: "checkmark.shield").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.cAI)
+                Spacer()
+                if let cur = m.currentValidator { Text(cur.isEmpty ? "No validator today" : "Replaces the current validator").font(.system(size: 11)).foregroundStyle(Color.cText3) }
+                Button { m.validator = nil } label: { Image(systemName: "xmark") }.buttonStyle(.borderless)
+            }
+            if let n = m.validatorNote { MarkdownText(n) }
+            CodeEditor(text: Binding(get: { m.validator ?? "" }, set: { m.validator = $0 }))
+                .frame(height: 240).background(Color.cField, in: RoundedRectangle(cornerRadius: 7))
+            if let e = m.validatorError { Label(e, systemImage: "exclamationmark.triangle.fill").font(.system(size: 11.5)).foregroundStyle(Color.cRed).textSelection(.enabled) }
+            HStack {
+                Picker("Level", selection: $m.validationLevel) { Text("moderate").tag("moderate"); Text("strict").tag("strict") }.frame(width: 170)
+                Picker("Action", selection: $m.validationAction) { Text("warn").tag("warn"); Text("error").tag("error") }.frame(width: 150)
+                Spacer()
+                Button { app.copy("db.runCommand({ collMod: \"\(m.collection)\", validator: \(m.validator ?? "{}"), validationLevel: \"\(m.validationLevel)\", validationAction: \"\(m.validationAction)\" })") } label: { Label("Copy command", systemImage: "doc.on.doc") }.buttonStyle(.borderless)
+                if !m.session.readOnly {
+                    Button("Apply to collection") { Task { await m.applyValidator(app: app) } }.buttonStyle(.borderedProminent).tint(Color.cAI)
+                }
+            }
+            .font(.system(size: 12))
+        }
+        .padding(14)
+        .background(Color.cAI.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.cAI.opacity(0.25)))
     }
 }

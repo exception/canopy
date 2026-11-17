@@ -16,6 +16,13 @@ final class ToolServer {
 
     var url: String { "http://127.0.0.1:\(port)/mcp/\(token)" }
 
+    /// Starts (or restarts) the listener and waits until it has a port.
+    func ready() async -> Bool {
+        if port == 0 { listener?.cancel(); listener = nil; start() }
+        for _ in 0..<40 where port == 0 { try? await Task.sleep(for: .milliseconds(50)) }
+        return port != 0
+    }
+
     func start() {
         guard listener == nil else { return }
         let params = NWParameters.tcp
@@ -24,6 +31,7 @@ final class ToolServer {
         l.newConnectionHandler = { [weak self] c in Task { @MainActor in self?.accept(c) } }
         l.stateUpdateHandler = { [weak self] s in
             if case .ready = s, let p = l.port?.rawValue { Task { @MainActor in self?.port = p } }
+            if case .failed = s { Task { @MainActor in self?.listener = nil; self?.port = 0 } }
         }
         l.start(queue: .main)
         listener = l
@@ -53,6 +61,7 @@ final class ToolServer {
     }
 
     private func handle(_ req: HTTPRequest) async -> Data {
+        guard req.method != "BAD" else { return HTTPRequest.response(400, body: Data()) }
         guard req.path == "/mcp/\(token)" else { return HTTPRequest.response(404, body: Data()) }
         guard req.method == "POST" else { return HTTPRequest.response(405, body: Data()) }
         guard let msg = try? JSONSerialization.jsonObject(with: req.body) as? [String: Any] else {
@@ -100,7 +109,7 @@ struct HTTPRequest {
         for l in lines.dropFirst() {
             if let c = l.firstIndex(of: ":") { headers[l[..<c].lowercased()] = l[l.index(after: c)...].trimmingCharacters(in: .whitespaces) }
         }
-        let len = Int(headers["content-length"] ?? "0") ?? 0
+        guard let len = Int(headers["content-length"] ?? "0"), len >= 0, len <= 8 << 20 else { return HTTPRequest(method: "BAD", path: "", headers: [:], body: Data()) }
         let body = d[end.upperBound...]
         guard body.count >= len else { return nil }
         return HTTPRequest(method: String(first[0]), path: String(first[1]), headers: headers, body: Data(body.prefix(len)))
@@ -195,7 +204,10 @@ enum CanopyTools {
             case "propose_query":
                 let kind = a["kind"] as? String ?? "find"
                 // Validate before showing.
-                if kind == "aggregate" { _ = try ShellParser.parseArray(a["pipeline"] as? String ?? "[]") }
+                if kind == "aggregate" {
+                    let p = try ShellParser.parseArray(a["pipeline"] as? String ?? "[]")
+                    if p.contains(where: { ["$out", "$merge"].contains($0.doc?.keys.first ?? "") }) { return ("Proposals can't contain $out or $merge.", true) }
+                }
                 else { _ = try doc("filter"); _ = try doc("sort"); _ = try doc("projection") }
                 app.copilot.addProposal(Proposal(db: db, collection: coll, kind: kind, title: a["title"] as? String ?? "Query",
                                                  filter: a["filter"] as? String ?? "", sort: a["sort"] as? String ?? "",

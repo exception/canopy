@@ -141,11 +141,16 @@ final class MongoService: @unchecked Sendable {
         var id = cur["id"] ?? .int64(0)
         let ns = cur["ns"]?.stringValue ?? ""
         let coll = ns.split(separator: ".", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
-        while docs.count < max, id.number ?? 0 != 0 {
-            let more = try await command(BDoc([("getMore", id), ("collection", .string(coll)), ("batchSize", .int32(Int32(min(1000, max - docs.count))))]), db: db)
-            guard let c = more["cursor"]?.doc else { break }
-            docs += (c["nextBatch"]?.arrayValue ?? []).compactMap(\.doc)
-            id = c["id"] ?? .int64(0)
+        do {
+            while docs.count < max, id.number ?? 0 != 0 {
+                let more = try await command(BDoc([("getMore", id), ("collection", .string(coll)), ("batchSize", .int32(Int32(min(1000, max - docs.count))))]), db: db)
+                guard let c = more["cursor"]?.doc else { break }
+                docs += (c["nextBatch"]?.arrayValue ?? []).compactMap(\.doc)
+                id = c["id"] ?? .int64(0)
+            }
+        } catch {
+            if id.number ?? 0 != 0 { _ = try? await command(BDoc([("killCursors", .string(coll)), ("cursors", .array([id]))]), db: db) }
+            throw error
         }
         if id.number ?? 0 != 0 {
             _ = try? await command(BDoc([("killCursors", .string(coll)), ("cursors", .array([id]))]), db: db)
@@ -324,9 +329,10 @@ final class MongoService: @unchecked Sendable {
     }
 
     func delete(db: String, collection: String, id: BValue) async throws {
-        try await command(BDoc([("delete", .string(collection)), ("deletes", .array([.document(BDoc([
+        let r = try await command(BDoc([("delete", .string(collection)), ("deletes", .array([.document(BDoc([
             ("q", .document(BDoc([("_id", id)]))), ("limit", .int32(1)),
         ]))]))]), db: db)
+        if r["n"]?.number == 0 { throw MongoCommandError(message: "That document was already deleted", code: nil, codeName: nil) }
     }
 
     /// `update` is an operator document ({$set: …}) or a pipeline array.

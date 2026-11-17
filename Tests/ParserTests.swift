@@ -100,4 +100,37 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(docs[1]["age"], .null)
         XCTAssertEqual(docs[1]["note"], .string("say \"hi\""))
     }
+
+    // Regressions from code review.
+    func testWholeDoublesKeepTheirType() throws {
+        let src = BDoc([("a", .double(5)), ("b", .double(-0.0)), ("c", .int32(5))])
+        let back = try ShellParser.parseDocument(BFormat.text(src))
+        XCTAssertEqual(back["a"], .double(5))
+        if case .double(let z) = back["b"] { XCTAssertEqual(z.sign, .minus) } else { XCTFail() }
+        XCTAssertEqual(back["c"], .int32(5))
+    }
+
+    func testOutOfRangeNumbersThrowInsteadOfCrashing() {
+        for bad in ["{a: NumberInt(3000000000)}", "{a: NumberLong(1e19)}", "{a: BinData(256, \"\")}", "{a: Timestamp(-1, 0)}"] {
+            XCTAssertThrowsError(try ShellParser.parseDocument(bad), bad)
+        }
+        XCTAssertNoThrow(try ShellParser.parseDocument("{a: {$timestamp: {t: -1, i: 0}}}")) // left as a plain doc, not a crash
+    }
+
+    func testInvalidExtendedJSONIsNotSilentlyRewritten() throws {
+        let d = try ShellParser.parseDocument(#"{"a": {"$oid": "zzzzzzzzzzzzzzzzzzzzzzzz"}, "b": {"$numberDecimal": "1,000"}}"#)
+        XCTAssertNotNil(d["a"]?.doc, "invalid $oid stays a document so the server rejects it")
+        XCTAssertNotNil(d["b"]?.doc)
+    }
+
+    func testDatesWithoutZoneKeepMilliseconds() throws {
+        let d = try ShellParser.parseDocument(#"{t: ISODate("2026-01-01T10:00:00.123")}"#)
+        guard case .date(let dt) = d["t"] else { return XCTFail() }
+        XCTAssertEqual(dt.timeIntervalSince1970.truncatingRemainder(dividingBy: 1), 0.123, accuracy: 0.0005)
+    }
+
+    func testHTTPRejectsBadContentLength() {
+        let r = HTTPRequest.parse(Data("POST /mcp/x HTTP/1.1\r\nContent-Length: -5\r\n\r\n".utf8))
+        XCTAssertEqual(r?.method, "BAD")
+    }
 }

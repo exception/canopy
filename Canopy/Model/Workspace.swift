@@ -80,6 +80,9 @@ final class DocumentsModel {
 
     // Inline editing
     var editing: Int?          // index in docs, or -1 for a new document
+    var editingID: BValue?     // _id captured when editing began
+    private var runToken = 0
+    private var liveGeneration = 0
     var editText = ""
     var editError: String?
 
@@ -130,12 +133,16 @@ final class DocumentsModel {
         if resetPage { page = 0 }
         let q: FindQuery
         do { q = try buildQuery() } catch { self.error = error.localizedDescription; return }
+        runToken += 1
+        let token = runToken
         loading = true
         error = nil
         newSinceRun = 0
-        defer { loading = false; hasRun = true }
+        defer { if token == runToken { loading = false; hasRun = true } }
         do {
             let r = try await session.service.find(db: db, collection: collection, query: q)
+            guard token == runToken else { return } // a newer run superseded this one
+            if editing != nil && editing != -1 { editing = nil } // the row being edited may be gone
             docs = r.documents
             elapsed = r.elapsed
             lastQuery = q
@@ -144,11 +151,13 @@ final class DocumentsModel {
                 total = nil
                 countTimedOut = false
                 let n = try? await session.service.count(db: db, collection: collection, filter: q.filter)
+                guard token == runToken else { return }
                 total = n
                 countTimedOut = n == nil
             }
             if record && resetPage { History.shared.record(namespace: "\(db).\(collection)", kind: "find", filter: filterText, sort: sortText, project: projectText, pipeline: "") }
         } catch {
+            guard token == runToken else { return }
             self.error = error.localizedDescription
             docs = []
         }
@@ -175,6 +184,7 @@ final class DocumentsModel {
 
     func beginEdit(_ i: Int) {
         editing = i
+        editingID = docs[i]["_id"]
         editText = BFormat.text(docs[i])
         editError = nil
         selected = i
@@ -196,9 +206,11 @@ final class DocumentsModel {
             if i == -1 {
                 _ = try await session.service.insert(db: db, collection: collection, docs: [d])
             } else {
-                guard let id = docs[i]["_id"] else { editError = "Document has no _id"; return false }
+                guard let id = editingID else { editError = "Document has no _id"; return false }
+                if let newID = d.id, newID != id { editError = "_id can't be changed; insert a copy instead"; return false }
                 try await session.service.replace(db: db, collection: collection, id: id, with: d)
-                docs[i] = d.id == nil ? BDoc([("_id", id)] + d.fields.map { ($0.key, $0.value) }) : d
+                let saved = d.id == nil ? BDoc([("_id", id)] + d.fields.map { ($0.key, $0.value) }) : d
+                if let row = docs.firstIndex(where: { $0["_id"] == id }) { docs[row] = saved }
             }
             editing = nil
             if i == -1 { await run(resetPage: false) }
@@ -214,7 +226,7 @@ final class DocumentsModel {
         guard !session.readOnly, docs.indices.contains(i), let id = docs[i]["_id"] else { return }
         do {
             try await session.service.delete(db: db, collection: collection, id: id)
-            docs.remove(at: i)
+            docs.removeAll { $0["_id"] == id }
             total = total.map { $0 - 1 }
             selected = nil
             Task { await session.refreshStat(db, collection) }
@@ -225,6 +237,8 @@ final class DocumentsModel {
         if live { stopLive(); return }
         live = true
         liveError = nil
+        liveGeneration += 1
+        let gen = liveGeneration
         let stream = session.service.watch(db: db, collection: collection)
         liveTask = Task {
             do {
@@ -236,13 +250,14 @@ final class DocumentsModel {
                     if e["operationType"] == .string("delete") { total = total.map { $0 - 1 } }
                 }
             } catch {
-                liveError = error.localizedDescription
+                if gen == liveGeneration && !Task.isCancelled { liveError = error.localizedDescription }
             }
-            live = false
+            if gen == liveGeneration { live = false }
         }
     }
 
     func stopLive() {
+        liveGeneration += 1
         liveTask?.cancel()
         liveTask = nil
         live = false
@@ -416,6 +431,31 @@ final class SchemaModel {
     var expanded: String?
     var insight: String?
     var insightBusy = false
+    var validator: String?
+    var validatorNote: String?
+    var validatorError: String?
+    var validatorBusy = false
+    var currentValidator: String?
+    var validationLevel = "moderate"
+    var validationAction = "warn"
+
+    func loadCurrentValidator() async {
+        let r = try? await session.service.command(BDoc([("listCollections", .int32(1)), ("filter", .document(["name": .string(collection)]))]), db: db)
+        let info = r?["cursor"]?.doc?["firstBatch"]?.arrayValue?.first?.doc?["options"]?.doc
+        currentValidator = info?["validator"].map { BFormat.text($0) } ?? ""
+    }
+
+    func applyValidator(app: AppState) async {
+        guard !session.readOnly else { return }
+        do {
+            let v = try ShellParser.parseDocument(validator ?? "{}")
+            try await session.service.command(BDoc([("collMod", .string(collection)), ("validator", .document(v)),
+                                                    ("validationLevel", .string(validationLevel)), ("validationAction", .string(validationAction))]), db: db)
+            validatorError = nil
+            app.flash("Validator applied to \(collection)")
+            await loadCurrentValidator()
+        } catch { validatorError = error.localizedDescription }
+    }
 
     init(session: Session, db: String, collection: String) {
         self.session = session

@@ -280,12 +280,12 @@ struct ShellParser {
             throw err("Bad date")
         case "NumberLong", "Long", "Int64":
             if let str, let v = Int64(str) { return .int64(v) }
-            if let n = a.first?.number { return .int64(Int64(n)) }
-            throw err("Bad NumberLong")
+            if let n = a.first?.number, let v = Int64(exactly: n.rounded(.towardZero)) { return .int64(v) }
+            throw err("NumberLong out of range")
         case "NumberInt", "Int32":
             if let str, let v = Int32(str) { return .int32(v) }
-            if let n = a.first?.number { return .int32(Int32(n)) }
-            throw err("Bad NumberInt")
+            if let n = a.first?.number, let v = Int32(exactly: n.rounded(.towardZero)) { return .int32(v) }
+            throw err("NumberInt out of range")
         case "Double":
             if let n = a.first?.number { return .double(n) }
             if let str, let v = Double(str) { return .double(v) }
@@ -299,11 +299,12 @@ struct ShellParser {
             guard hex.count == 32, let data = Data(hex: hex) else { throw err("Bad UUID") }
             return .binary(4, data)
         case "BinData":
-            guard a.count == 2, let sub = a[0].number, let b64 = a[1].stringValue, let data = Data(base64Encoded: b64) else { throw err("BinData(subtype, base64)") }
-            return .binary(UInt8(sub), data)
+            guard a.count == 2, let n = a[0].number, let sub = UInt8(exactly: n), let b64 = a[1].stringValue, let data = Data(base64Encoded: b64) else { throw err("BinData(subtype 0-255, base64)") }
+            return .binary(sub, data)
         case "Timestamp":
-            if a.count == 2, let t = a[0].number, let inc = a[1].number { return .timestamp(UInt32(t), UInt32(inc)) }
-            if let d = a.first?.doc, let t = d["t"]?.number, let inc = d["i"]?.number { return .timestamp(UInt32(t), UInt32(inc)) }
+            if a.count == 2, let t = a[0].number.flatMap({ UInt32(exactly: $0) }), let inc = a[1].number.flatMap({ UInt32(exactly: $0) }) { return .timestamp(t, inc) }
+            if let d = a.first?.doc, let t = d["t"]?.number.flatMap({ UInt32(exactly: $0) }), let inc = d["i"]?.number.flatMap({ UInt32(exactly: $0) }) { return .timestamp(t, inc) }
+            if !a.isEmpty { throw err("Timestamp values must be 0…4294967295") }
             return .timestamp(UInt32(Date().timeIntervalSince1970), 0)
         case "RegExp":
             return .regex(str ?? "", a.count > 1 ? a[1].stringValue ?? "" : "")
@@ -338,7 +339,7 @@ enum EJSON {
         let k = d.fields[0].key, v = d.fields[0].value
         if d.count == 2 { return nil } // e.g. {$regex, $options} is a query operator, not a wrapper
         switch k {
-        case "$oid": if let s = v.stringValue, s.count == 24 { return .objectId(s.lowercased()) }
+        case "$oid": if let s = v.stringValue, s.count == 24, s.allSatisfy(\.isHexDigit) { return .objectId(s.lowercased()) }
         case "$date":
             if let s = v.stringValue, let dt = DateParsing.parse(s) { return .date(dt) }
             if let n = v.number { return .date(Date(timeIntervalSince1970: n / 1000)) }
@@ -346,17 +347,17 @@ enum EJSON {
         case "$numberLong": if let s = v.stringValue, let n = Int64(s) { return .int64(n) }
         case "$numberInt": if let s = v.stringValue, let n = Int32(s) { return .int32(n) }
         case "$numberDouble": if let s = v.stringValue, let n = Double(s) { return .double(n) }
-        case "$numberDecimal": if let s = v.stringValue { return .decimal(s) }
+        case "$numberDecimal": if let s = v.stringValue, Decimal128Codec.parts(s) != nil { return .decimal(s) }
         case "$uuid": if let s = v.stringValue, let data = Data(hex: s.replacingOccurrences(of: "-", with: "")) { return .binary(4, data) }
         case "$binary":
             if let inner = v.doc, let b = inner["base64"]?.stringValue, let data = Data(base64Encoded: b) {
-                let sub = UInt8(inner["subType"]?.stringValue.flatMap { UInt8($0, radix: 16) } ?? 0)
+                let sub = inner["subType"]?.stringValue.flatMap { UInt8($0, radix: 16) } ?? 0
                 return .binary(sub, data)
             }
         case "$regularExpression":
             if let inner = v.doc, let p = inner["pattern"]?.stringValue { return .regex(p, inner["options"]?.stringValue ?? "") }
         case "$timestamp":
-            if let inner = v.doc, let t = inner["t"]?.number, let i = inner["i"]?.number { return .timestamp(UInt32(t), UInt32(i)) }
+            if let inner = v.doc, let t = inner["t"]?.number.flatMap({ UInt32(exactly: $0) }), let i = inner["i"]?.number.flatMap({ UInt32(exactly: $0) }) { return .timestamp(t, i) }
         case "$minKey": return .minKey
         case "$maxKey": return .maxKey
         default: break
@@ -375,6 +376,9 @@ enum DateParsing {
     private static let dayOnly: DateFormatter = {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(identifier: "UTC"); f.dateFormat = "yyyy-MM-dd"; return f
     }()
+    private static let noZoneFrac: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(identifier: "UTC"); f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"; return f
+    }()
     private static let noZone: DateFormatter = {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(identifier: "UTC"); f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"; return f
     }()
@@ -383,6 +387,7 @@ enum DateParsing {
         if let d = isoFrac.date(from: s) ?? iso.date(from: s) { return d }
         if let d = dayOnly.date(from: s) { return d }
         let trimmed = s.replacingOccurrences(of: "Z", with: "")
+        if trimmed.count > 20, let d = noZoneFrac.date(from: String(trimmed.prefix(23))) { return d }
         if let d = noZone.date(from: String(trimmed.prefix(19))) { return d }
         return nil
     }

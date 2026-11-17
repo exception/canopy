@@ -80,11 +80,15 @@ final class CopilotModel {
         streamingText = ""
         let h = ClaudeCLI.Handle()
         handle = h
-        ToolServer.shared.start()
         let system = systemPrompt(app)
         let full = contextLine(app) + "\n\n" + prompt
-        let stream = ClaudeCLI.stream(prompt: full, system: system, resume: sessionID, mcpURL: ToolServer.shared.url, handle: h)
         Task {
+            guard await ToolServer.shared.ready() else {
+                messages[messages.count - 1].error = "Couldn't start Canopy's local tool server."
+                busy = false
+                return
+            }
+            let stream = ClaudeCLI.stream(prompt: full, system: system, resume: sessionID, mcpURL: ToolServer.shared.url, handle: h)
             for await ev in stream { self.process(ev) }
             busy = false
         }
@@ -152,8 +156,11 @@ final class CopilotModel {
         let tab = app.open(db: p.db, collection: p.collection)
         if p.kind == "aggregate" {
             tab.mode = .aggregations
-            if let pipe = try? ShellParser.parseArray(p.pipeline) { tab.agg.load(pipeline: pipe) }
-            Task { await tab.agg.refreshPreviews(); await tab.agg.run() }
+            let pipe = (try? ShellParser.parseArray(p.pipeline)) ?? []
+            tab.agg.load(pipeline: pipe)
+            let writes = pipe.contains { ["$out", "$merge"].contains($0.doc?.keys.first ?? "") }
+            // Never run a write stage on the model's behalf; the user presses Run.
+            Task { await tab.agg.refreshPreviews(); if !writes { await tab.agg.run() } }
         } else {
             tab.mode = .documents
             tab.docs.apply(filter: p.filter, sort: p.sort, project: p.projection)
@@ -275,6 +282,27 @@ enum AIActions {
                                                    schema: ["type": "object", "properties": ["markdown": ["type": "string"]], "required": ["markdown"]])
             m.insight = r["markdown"] as? String
         } catch { m.insight = "⚠️ " + error.localizedDescription }
+    }
+
+    static func validator(_ m: SchemaModel) async {
+        guard let report = m.report else { return }
+        m.validatorBusy = true
+        defer { m.validatorBusy = false }
+        await m.loadCurrentValidator()
+        let system = """
+        You write MongoDB $jsonSchema validators from a schema inferred from a sample. Use bsonType names (objectId, string, int, long, double, \
+        decimal, date, bool, object, array, null). Mark a field required only if present in ~100% of the sample. Allow null where the sample has nulls. \
+        Use enum for string fields with a small fixed set of values. Describe nested objects and array items. Keep it practical, not exhaustive. \
+        validator: the full validator document in mongosh syntax, i.e. { $jsonSchema: { … } }. note: 1-3 short bullets on the choices worth double-checking.
+        """
+        let schemaDef: [String: Any] = ["type": "object", "properties": ["validator": ["type": "string"], "note": ["type": "string"]], "required": ["validator", "note"], "additionalProperties": false]
+        do {
+            let r = try await ClaudeCLI.structured(prompt: "Collection \(m.db).\(m.collection)\nCurrent validator: \(m.currentValidator?.isEmpty == false ? m.currentValidator! : "none")\n\n\(report.summary)", system: system, schema: schemaDef)
+            let text = r["validator"] as? String ?? "{}"
+            m.validator = (try? ShellParser.parse(text)).map { BFormat.text($0) } ?? text
+            m.validatorNote = r["note"] as? String
+            m.validatorError = nil
+        } catch { m.validatorError = error.localizedDescription; m.validator = m.validator ?? "" }
     }
 
     static func explain(_ m: ExplainModel) async {

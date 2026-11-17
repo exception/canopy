@@ -63,6 +63,14 @@ enum BFormat {
         return parts.joined(separator: "-")
     }
 
+    /// A double that reads back as a double: whole values keep ".0", -0 stays -0.
+    static func doubleLiteral(_ d: Double) -> String {
+        if d.isNaN || d.isInfinite { return number(d) }
+        if d == 0 && d.sign == .minus { return "-0.0" }
+        if d == d.rounded(), abs(d) < 1e15 { return String(Int64(d)) + ".0" }
+        return String(d)
+    }
+
     static func number(_ d: Double) -> String {
         if d.isNaN { return "NaN" }
         if d.isInfinite { return d < 0 ? "-Infinity" : "Infinity" }
@@ -108,7 +116,7 @@ enum BFormat {
         case .string(let s): o += quote(s)
         case .double(let d):
             if style == .ejson && (d.isNaN || d.isInfinite) { o += "{\"$numberDouble\": \"\(number(d))\"}" }
-            else { o += number(d) }
+            else { o += doubleLiteral(d) }
         case .int32(let i): o += String(i)
         case .int64(let i): o += style == .shell ? "Long(\"\(i)\")" : String(i)
         case .decimal(let s): o += style == .shell ? "Decimal128(\"\(s)\")" : "{\"$numberDecimal\": \"\(s)\"}"

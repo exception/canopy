@@ -13,6 +13,7 @@ struct SchemaField: Identifiable {
     var dates: [Date] = []
     var lengths: [Int] = []         // array lengths
     var sampleValues: [BValue] = []
+    var points: [(Double, Double)] = []   // GeoJSON Point (lng, lat)
     var id: String { path }
 
     var total: Int { types.values.reduce(0, +) }
@@ -70,7 +71,11 @@ enum SchemaAnalyzer {
             map[path]!.types[v.typeName, default: 0] += 1
             if map[path]!.sampleValues.count < 5, !v.isContainer { map[path]!.sampleValues.append(v) }
             switch v {
-            case .document(let sub): visit(sub, prefix: path, depth: depth + 1)
+            case .document(let sub):
+                if sub["type"] == .string("Point"), let c = sub["coordinates"]?.arrayValue, c.count == 2, let lng = c[0].number, let lat = c[1].number {
+                    map[path]!.points.append((lng, lat))
+                }
+                visit(sub, prefix: path, depth: depth + 1)
             case .array(let items):
                 map[path]!.lengths.append(items.count)
                 // Array elements are described under "path[]"? Keep it simple:
