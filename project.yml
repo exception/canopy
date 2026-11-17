@@ -7,6 +7,9 @@ options:
   developmentLanguage: en
 
 packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.6.0"
   MongoKitten:
     url: https://github.com/orlandos-nl/MongoKitten
     from: "7.17.0"
@@ -37,11 +40,14 @@ targets:
         product: MongoClient
       - package: MongoKitten
         product: MongoCore
+      - package: Sparkle
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.canopy.app
         PRODUCT_NAME: Canopy
         GENERATE_INFOPLIST_FILE: YES
+        # Merged with the generated plist: holds the Sparkle feed and public key.
+        INFOPLIST_FILE: Resources/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: Canopy
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         INFOPLIST_KEY_NSHumanReadableCopyright: ""

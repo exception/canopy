@@ -1,0 +1,120 @@
+#!/bin/zsh
+# Builds a release of Canopy and packages it as a drag-to-install DMG with a Sparkle appcast.
+#
+#   scripts/release.sh                          # version from project.yml
+#   scripts/release.sh --publish notes.md       # ...and create the GitHub release
+#
+# Updates: the app checks the appcast.xml attached to the latest GitHub release
+# (SUFeedURL in Resources/Info.plist). This script signs the DMG with the Sparkle EdDSA key
+# stored in your login keychain under the account "canopy" (made once with
+# `generate_keys --account canopy`; never commit it) and writes build/release/appcast.xml.
+# Attach both files to every release, or installed copies stop seeing updates.
+# CURRENT_PROJECT_VERSION in project.yml must go up every release: Sparkle compares it.
+#
+# Signing: first "Developer ID Application" identity in the keychain (or $SIGN_ID). Without one
+# the app is ad-hoc signed and only runs without warnings on this Mac.
+# Notarization: if a notarytool keychain profile named $NOTARY_PROFILE (default "canopy-notary")
+# exists, the app and DMG are notarized and stapled.
+set -euo pipefail
+cd "${0:A:h}/.."
+PUBLISH=0; NOTES=""
+if [[ ${1:-} == --publish ]]; then
+  PUBLISH=1; NOTES=${2:-}
+  [[ -f $NOTES ]] || { echo "usage: $0 --publish <release-notes.md>"; exit 1; }
+  cp "$NOTES" "${TMPDIR:-/tmp}/canopy-release-notes.md"; NOTES="${TMPDIR:-/tmp}/canopy-release-notes.md"
+fi
+unset PITWALL_SOCKET PITWALL_TILE_ID PITWALL_BOARD_ID PITWALL_SESSION_ID PITWALL_CLI
+VERSION=$(awk -F'"' '/MARKETING_VERSION/{print $2; exit}' project.yml)
+BUILD=$(awk -F'"' '/CURRENT_PROJECT_VERSION/{print $2; exit}' project.yml)
+REPO=${CANOPY_REPO:-exception/canopy}
+OUT=build/release
+DD=build/rel
+APP=$DD/Build/Products/Release/Canopy.app
+NOTARY_PROFILE=${NOTARY_PROFILE:-canopy-notary}
+SIGN_ID=${SIGN_ID:-$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/{print $2; exit}')}
+SIGN_ID=${SIGN_ID:--}
+
+echo "==> Canopy $VERSION ($BUILD), signing: ${SIGN_ID}"
+rm -rf $OUT && mkdir -p $OUT
+xcodegen generate >/dev/null
+
+echo "==> Building (Release, arm64)"
+xcodebuild -project Canopy.xcodeproj -scheme Canopy -configuration Release -derivedDataPath $DD \
+  ARCHS=arm64 ONLY_ACTIVE_ARCH=NO build | grep -E "error:|\*\* BUILD" || true
+[[ -d $APP ]] || { echo "build failed"; exit 1; }
+
+echo "==> Signing"
+TS=(); [[ $SIGN_ID != "-" ]] && TS=(--timestamp)
+# Sparkle's helpers are nested code: sign them inside-out before the app.
+SPK=$APP/Contents/Frameworks/Sparkle.framework/Versions/B
+codesign --force --sign "$SIGN_ID" --options runtime $TS "$SPK/XPCServices/Installer.xpc"
+codesign --force --sign "$SIGN_ID" --options runtime $TS --preserve-metadata=entitlements "$SPK/XPCServices/Downloader.xpc"
+codesign --force --sign "$SIGN_ID" --options runtime $TS "$SPK/Autoupdate"
+codesign --force --sign "$SIGN_ID" --options runtime $TS "$SPK/Updater.app"
+codesign --force --sign "$SIGN_ID" --options runtime $TS "$APP/Contents/Frameworks/Sparkle.framework"
+codesign --force --sign "$SIGN_ID" --options runtime $TS --entitlements Resources/Canopy.entitlements "$APP"
+codesign --verify --strict --deep "$APP"
+
+CAN_NOTARIZE=0
+if [[ $SIGN_ID != "-" ]] && xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then CAN_NOTARIZE=1; fi
+if (( CAN_NOTARIZE )); then
+  echo "==> Notarizing the app"
+  ditto -c -k --keepParent "$APP" $OUT/Canopy.zip
+  xcrun notarytool submit $OUT/Canopy.zip --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun stapler staple "$APP"
+  rm $OUT/Canopy.zip
+fi
+
+echo "==> Making the DMG"
+STAGE=$OUT/stage
+mkdir -p $STAGE
+ditto "$APP" $STAGE/Canopy.app
+ln -s /Applications $STAGE/Applications
+DMG=$OUT/Canopy-$VERSION.dmg
+hdiutil create -srcfolder $STAGE -volname "Canopy" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov $DMG >/dev/null
+rm -rf $STAGE
+[[ $SIGN_ID != "-" ]] && codesign --force --sign "$SIGN_ID" $TS $DMG
+if (( CAN_NOTARIZE )); then
+  echo "==> Notarizing the DMG"
+  xcrun notarytool submit $DMG --keychain-profile "$NOTARY_PROFILE" --wait && xcrun stapler staple $DMG
+fi
+echo "==> $DMG ($(du -h $DMG | cut -f1))"
+if [[ $SIGN_ID == "-" ]]; then
+  echo "    Ad-hoc signed: fine on this Mac, blocked by Gatekeeper elsewhere. Needs a Developer ID to ship."
+elif (( ! CAN_NOTARIZE )); then
+  echo "    Signed but not notarized: other Macs will warn. Set up '$NOTARY_PROFILE' with xcrun notarytool store-credentials."
+fi
+
+echo "==> Writing the appcast"
+SIGN_UPDATE=$DD/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update
+ED=$($SIGN_UPDATE --account canopy $DMG) || { echo "sign_update failed: is the 'canopy' Sparkle key in this keychain? (generate_keys --account canopy)"; exit 1; }
+NOTES_HTML=""
+if [[ -n $NOTES ]]; then
+  NOTES_HTML=$(gh api -X POST /markdown -f mode=gfm -f context=$REPO -F text=@$NOTES)
+fi
+cat > $OUT/appcast.xml <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Canopy</title>
+    <item>
+      <title>Canopy $VERSION</title>
+      <pubDate>$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>
+      <sparkle:version>$BUILD</sparkle:version>
+      <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/$REPO/releases/tag/v$VERSION</sparkle:fullReleaseNotesLink>
+      <description><![CDATA[$NOTES_HTML]]></description>
+      <enclosure url="https://github.com/$REPO/releases/download/v$VERSION/Canopy-$VERSION.dmg" type="application/octet-stream" $ED />
+    </item>
+  </channel>
+</rss>
+XML
+echo "==> $OUT/appcast.xml"
+
+if (( PUBLISH )); then
+  echo "==> Publishing v$VERSION"
+  gh release create v$VERSION $DMG $OUT/appcast.xml -R $REPO --title "Canopy $VERSION" --notes-file $NOTES
+else
+  echo "    Publish with: gh release create v$VERSION $DMG $OUT/appcast.xml -R $REPO --title \"Canopy $VERSION\" --notes-file <notes.md>"
+fi

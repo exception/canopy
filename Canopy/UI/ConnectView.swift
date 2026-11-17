@@ -400,5 +400,8 @@ struct ProdBadge: View {
             .foregroundStyle(.white)
             .padding(.horizontal, small ? 5 : 7).padding(.vertical, small ? 1.5 : 2.5)
             .background(Color.cRed, in: Capsule())
+            .lineLimit(1)
+            .fixedSize()       // never wrap or squeeze; the connection name truncates instead
+            .layoutPriority(1)
     }
 }

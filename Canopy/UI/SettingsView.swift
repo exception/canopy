@@ -5,6 +5,7 @@ struct SettingsView: View {
     @AppStorage("aiModel") private var model = "opus"
     @AppStorage("aiQuickModel") private var quickModel = "sonnet"
     @AppStorage("claudePath") private var claudePath = ""
+    @State private var autoUpdate = Updater.shared.automaticallyChecks
 
     var body: some View {
         Form {
@@ -35,8 +36,19 @@ struct SettingsView: View {
                 Text("Canopy runs Claude through Claude Code, so it uses your existing login. Claude only gets read-only tools: it can't write, drop or run $out.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
+            Section("Updates") {
+                Toggle("Check for updates automatically", isOn: $autoUpdate)
+                    .onChange(of: autoUpdate) { _, v in Updater.shared.automaticallyChecks = v }
+                LabeledContent("Version") {
+                    HStack {
+                        Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")
+                            .foregroundStyle(.secondary)
+                        Button("Check Now") { Updater.shared.checkForUpdates() }
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 380)
+        .frame(width: 480, height: 500)
     }
 }

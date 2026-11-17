@@ -19,6 +19,9 @@ struct CanopyApp: App {
         .windowToolbarStyle(.unified(showsTitle: false))
         .defaultSize(width: 1440, height: 900)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { Updater.shared.checkForUpdates() }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Connection…") { app.editingConnection = SavedConnection(name: "", uri: "mongodb://localhost:27017") }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
@@ -75,7 +78,7 @@ extension Notification.Name {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
         Automation.startIfRequested()
-        Task { @MainActor in TitlebarDoubleClick.install() }
+        Task { @MainActor in TitlebarDoubleClick.install(); Updater.shared.start() }
         Task { @MainActor in ToolServer.shared.start() }
         if let auto = ProcessInfo.processInfo.environment["CANOPY_AUTOCONNECT"] {
             Task { @MainActor in

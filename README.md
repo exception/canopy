@@ -67,6 +67,10 @@ open build/dd/Build/Products/Debug/Canopy.app
 
 Tests: `xcodebuild -project Canopy.xcodeproj -scheme Canopy -derivedDataPath build/dd test` (parser, Extended JSON, Decimal128, BSON bridging, type preservation on edit, schema, CSV import, connection strings, MCP request parsing).
 
+### Releases and updates
+
+Canopy updates itself with [Sparkle](https://sparkle-project.org). `scripts/release.sh` builds a signed Release, makes `build/release/Canopy-<version>.dmg`, signs it with the Sparkle EdDSA key from your keychain (account `canopy`) and writes `build/release/appcast.xml`. `scripts/release.sh --publish notes.md` also creates the GitHub release; the app reads the appcast from the latest release (`SUFeedURL` in `Resources/Info.plist`). Bump `CURRENT_PROJECT_VERSION` in `project.yml` for every release.
+
 ### Demo data and recordings
 
 ```sh
