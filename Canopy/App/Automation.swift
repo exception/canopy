@@ -217,6 +217,9 @@ enum Automation {
             await typeOut(arg) { b.askText = $0 }
             await AIActions.update(b)
             return b.askError ?? "ok"
+        case "new-connection":
+            app.editingConnection = SavedConnection(name: "", uri: arg.isEmpty ? "mongodb://localhost:27017" : arg)
+            return "ok"
         case "live":
             app.currentTab?.docs.toggleLive()
             return "ok"

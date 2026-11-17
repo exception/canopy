@@ -163,7 +163,9 @@ struct ConnectionEditor: View {
             Text(app.connections.contains { $0.id == connection.id } ? "Edit connection" : "New connection").font(.system(size: 16, weight: .semibold))
             Form {
                 TextField("Name", text: $connection.name, prompt: Text("Production"))
-                TextField("Connection string", text: $uriText, prompt: Text("mongodb+srv://user@cluster.example.net/"), axis: .vertical)
+                TextField(text: $uriText, prompt: Text("mongodb+srv://user@cluster.example.net/"), axis: .vertical) {
+                    Text("Connection string").font(.system(size: 13))
+                }
                     .font(.system(size: 12, design: .monospaced))
                     .onChange(of: uriText) { _, v in
                         let (u, p) = ConnectionString.split(v)
