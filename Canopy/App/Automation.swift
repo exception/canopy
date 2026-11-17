@@ -178,6 +178,14 @@ enum Automation {
         case "select":
             app.currentTab?.docs.selected = Int(arg)
             return "ok"
+        case "delete":
+            guard let t = app.currentTab, let i = Int(arg) else { return "delete <row>" }
+            let before = t.docs.docs.count
+            await t.docs.delete(i)
+            return t.docs.docs.count < before ? "deleted" : "kept"
+        case "edit-connection":
+            app.editingConnection = app.connections.first { $0.name == arg }
+            return app.editingConnection == nil ? "no such connection" : "ok"
         case "ask":
             guard let t = app.currentTab else { return "no tab" }
             await typeOut(arg) { t.docs.askText = $0 }

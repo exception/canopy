@@ -224,6 +224,7 @@ final class DocumentsModel {
 
     func delete(_ i: Int) async {
         guard !session.readOnly, docs.indices.contains(i), let id = docs[i]["_id"] else { return }
+        guard await session.authorize("delete a document from \(db).\(collection)") else { return }
         do {
             try await session.service.delete(db: db, collection: collection, id: id)
             docs.removeAll { $0["_id"] == id }
@@ -407,6 +408,8 @@ final class AggregationModel {
                 error = "This connection is read-only."
                 return
             }
+            if p.contains(where: { $0.doc?.keys.first == "$out" || $0.doc?.keys.first == "$merge" }),
+               !(await session.authorize("run a pipeline that writes with $out/$merge from \(db).\(collection)")) { return }
             let r = try await session.service.aggregate(db: db, collection: collection, pipeline: p, max: 200)
             results = r.documents
             resultsElapsed = r.elapsed
@@ -447,6 +450,7 @@ final class SchemaModel {
 
     func applyValidator(app: AppState) async {
         guard !session.readOnly else { return }
+        guard await session.authorize("change the validator on \(db).\(collection)") else { return }
         do {
             let v = try ShellParser.parseDocument(validator ?? "{}")
             try await session.service.command(BDoc([("collMod", .string(collection)), ("validator", .document(v)),
@@ -507,6 +511,7 @@ final class IndexesModel {
 
     func create(keys: String, options: String) async -> String? {
         guard !session.readOnly else { return "This connection is read-only." }
+        guard await session.authorize("build an index on \(db).\(collection)") else { return "Not authorized." }
         do {
             try await session.service.createIndex(db: db, collection: collection, keys: try ShellParser.parseDocument(keys), options: try ShellParser.parseDocument(options))
             await load()
@@ -516,6 +521,7 @@ final class IndexesModel {
 
     func drop(_ name: String) async {
         guard !session.readOnly else { error = "This connection is read-only."; return }
+        guard await session.authorize("drop the index \(name) on \(db).\(collection)") else { return }
         do { try await session.service.dropIndex(db: db, collection: collection, name: name); await load() } catch { self.error = error.localizedDescription }
     }
 }

@@ -68,6 +68,7 @@ extension DocumentsModel {
         a.addButton(withTitle: "Import")
         a.addButton(withTitle: "Cancel")
         guard a.runModal() == .alertFirstButtonReturn else { return }
+        guard await session.authorize("import \(Fmt.count(docs.count)) documents into \(db).\(collection)") else { return }
         loading = true
         var n = 0
         do {

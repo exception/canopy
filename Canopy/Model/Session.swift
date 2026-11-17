@@ -19,6 +19,17 @@ final class Session {
     }
 
     var readOnly: Bool { saved.readOnly }
+    /// Read live from the saved list so toggling it in the editor applies without reconnecting.
+    var isProduction: Bool { AppState.shared.connections.first { $0.id == saved.id }?.isProduction ?? saved.isProduction }
+
+    /// Gate for big changes. Non-production connections pass straight through; production asks
+    /// for Touch ID or the account password. `action` completes "Canopy is trying to …".
+    func authorize(_ action: String) async -> Bool {
+        guard isProduction else { return true }
+        let ok = await ProductionGuard.authorize("\(action) on \(saved.name)")
+        if !ok { AppState.shared.flash("Not authorized. Nothing was changed.") }
+        return ok
+    }
 
     func refresh() async {
         do {

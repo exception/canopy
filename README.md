@@ -39,6 +39,8 @@ MongoDB Compass is an Electron app: slow to start, heavy to scroll, no real dark
 - **Server overview** with live operations per second, connections, memory, database sizes and running operations (with Kill).
 - **Command palette** (`⌘K`) to jump to any collection or action, tabs, query history with favorites, CSV/JSON export.
 - **Connections** with passwords in the Keychain, color tags, and a **read-only** switch that blocks writes, drops and `$out` from the app.
+- **Production connections** are marked in red everywhere (toolbar badge, a red edge on the workspace) and ask for **Touch ID or your Mac password** before deletes, drops, bulk updates, imports, index and validator changes, `$out`/`$merge` pipelines and killing operations.
+- **Switch connections** from the toolbar (click the connection name), `⌃⌘1`–`⌃⌘9`, or `⌘K`.
 
 <p align="center"><img alt="Bulk update written by Claude, with a match count before it runs" src="docs/images/bulk.png" width="85%"></p>
 <p align="center"><img alt="Live change stream panel" src="docs/images/live.png" width="85%"></p>

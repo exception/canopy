@@ -38,6 +38,9 @@ final class BulkModel {
 
     func execute() async -> Bool {
         guard !session.readOnly else { error = "This connection is read-only."; return false }
+        let n = matching.map { Fmt.count($0) } ?? "matching"
+        let verb = kind == .delete ? "delete \(n) documents" : "update \(n) documents"
+        guard await session.authorize("\(verb) in \(db).\(collection)") else { error = "Not authorized. Nothing was changed."; return false }
         running = true
         defer { running = false }
         do {

@@ -38,6 +38,7 @@ struct ConnectionRow: View {
                 HStack(spacing: 5) {
                     Text(c.name).font(.system(size: 12.5, weight: .medium))
                     if c.favorite { Image(systemName: "star.fill").font(.system(size: 8.5)).foregroundStyle(Color.cAmber) }
+                    if c.isProduction { ProdBadge(small: true) }
                     if c.readOnly { Image(systemName: "lock.fill").font(.system(size: 8.5)).foregroundStyle(Color.cText3) }
                 }
                 Text(c.host).font(.system(size: 11)).foregroundStyle(Color.cText3).lineLimit(1)
@@ -126,6 +127,7 @@ struct BigConnectionRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(c.name).font(.system(size: 13.5, weight: .semibold))
+                    if c.isProduction { ProdBadge(small: true) }
                     if c.readOnly { Text("READ-ONLY").font(.system(size: 9, weight: .bold)).foregroundStyle(Color.cAmber) }
                 }
                 Text(c.username.map { "\($0) @ \(c.host)" } ?? c.host).font(.system(size: 11.5)).foregroundStyle(Color.cText3)
@@ -177,6 +179,13 @@ struct ConnectionEditor: View {
                         Label { Text(name) } icon: { Image(systemName: "circle.fill").foregroundStyle(Color(ns: Theme.hex(hex))) }.tag(hex)
                     }
                 }
+                Toggle(isOn: $connection.isProduction) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Production")
+                        Text("Red marking, and Touch ID or your password before deletes, drops, bulk updates, imports, index and validator changes.")
+                            .font(.system(size: 11)).foregroundStyle(Color.cText3)
+                    }
+                }
                 Toggle("Read-only (blocks writes, drops and $out from this app)", isOn: $connection.readOnly)
                 Toggle("Favorite", isOn: $connection.favorite)
             }
@@ -226,5 +235,16 @@ struct ConnectionEditor: View {
         } catch {
             testResult = (false, error.localizedDescription)
         }
+    }
+}
+
+/// Red "PRODUCTION" capsule used wherever a production connection is named.
+struct ProdBadge: View {
+    var small = false
+    var body: some View {
+        Text("PRODUCTION").font(.system(size: small ? 8.5 : 10, weight: .heavy)).tracking(0.5)
+            .foregroundStyle(.white)
+            .padding(.horizontal, small ? 5 : 7).padding(.vertical, small ? 1.5 : 2.5)
+            .background(Color.cRed, in: Capsule())
     }
 }

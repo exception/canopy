@@ -153,7 +153,7 @@ struct ServerView: View {
                     Spacer()
                     Text("\(Int(op["secs_running"]?.number ?? 0)) s").font(.system(size: 11).monospacedDigit()).foregroundStyle(Color.cText2)
                     if !session.readOnly, let id = op["opid"] {
-                        Button("Kill") { Task { try? await session.service.killOp(id) } }.controlSize(.small)
+                        Button("Kill") { Task { if await session.authorize("kill a running operation") { try? await session.service.killOp(id) } } }.controlSize(.small)
                     }
                 }
                 Divider()

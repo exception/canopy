@@ -23,6 +23,15 @@ struct CanopyApp: App {
                 Button("New Connection…") { app.editingConnection = SavedConnection(name: "", uri: "mongodb://localhost:27017") }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
             }
+            CommandMenu("Connection") {
+                ForEach(Array(app.connections.prefix(9).enumerated()), id: \.element.id) { i, c in
+                    Button(c.name + (c.isProduction ? " (production)" : "")) { Task { await app.connect(c) } }
+                        .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: [.command, .control])
+                        .disabled(app.session?.saved.id == c.id)
+                }
+                Divider()
+                Button("Disconnect") { Task { await app.disconnect() } }.disabled(app.session == nil)
+            }
             CommandMenu("Go") {
                 Button("Command Palette…") { app.showPalette.toggle() }.keyboardShortcut("k")
                 Button("Ask Claude") { app.showCopilot.toggle() }.keyboardShortcut("j")

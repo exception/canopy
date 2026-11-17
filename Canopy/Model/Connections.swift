@@ -10,6 +10,14 @@ struct SavedConnection: Codable, Identifiable, Hashable {
     var readOnly = false
     var favorite = false
     var lastUsed: Date?
+    /// Optional so connections saved before this flag existed still decode.
+    var production: Bool?
+
+    /// Production connections need Touch ID (or the Mac password) for destructive or wide changes.
+    var isProduction: Bool {
+        get { production ?? false }
+        set { production = newValue }
+    }
 
     var host: String {
         guard let c = URLComponents(string: uri.replacingOccurrences(of: "mongodb+srv://", with: "https://").replacingOccurrences(of: "mongodb://", with: "https://")) else { return uri }

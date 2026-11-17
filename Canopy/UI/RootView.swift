@@ -32,6 +32,10 @@ struct RootView: View {
                 }
             }
             .background(Color(ns: Theme.window))
+            .overlay(alignment: .top) {
+                // A production connection keeps a red edge on the workspace at all times.
+                if app.session?.isProduction == true { Rectangle().fill(Color.cRed).frame(height: 2.5) }
+            }
             .toolbar { MainToolbar() }
         }
         .overlay { if app.showPalette { CommandPalette().transition(.opacity) } }
@@ -56,19 +60,7 @@ struct MainToolbar: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
             if let s = app.session {
-                HStack(spacing: 7) {
-                    Circle().fill(Color(ns: Theme.hex(s.saved.color))).frame(width: 8, height: 8)
-                    Text(s.saved.name).font(.system(size: 12.5, weight: .semibold))
-                    Text(s.saved.host).font(.system(size: 12)).foregroundStyle(Color.cText3)
-                    if !s.service.serverVersion.isEmpty {
-                        Text("v\(s.service.serverVersion)").font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.cText2)
-                            .padding(.horizontal, 6).padding(.vertical, 2).background(Color.cPill, in: Capsule())
-                    }
-                    if s.readOnly {
-                        Label("Read-only", systemImage: "lock.fill").font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.cAmber)
-                    }
-                }
-                .padding(.horizontal, 6)
+                ConnectionSwitcher(session: s)
             }
         }
         ToolbarItemGroup(placement: .primaryAction) {
@@ -158,5 +150,53 @@ struct TabChip: View {
         .contentShape(Rectangle())
         .onTapGesture { app.currentTabID = tab.id }
         .onHover { hover = $0 }
+    }
+}
+
+/// Toolbar chip naming the live connection; click it to switch to another saved connection.
+struct ConnectionSwitcher: View {
+    @Environment(AppState.self) private var app
+    let session: Session
+
+    var body: some View {
+        Menu {
+            Section("Switch connection") {
+                ForEach(app.connections) { c in
+                    Button { Task { await app.connect(c) } } label: {
+                        Label {
+                            Text(c.name + (c.isProduction ? "  · production" : "") + (c.id == session.saved.id ? "  ✓" : ""))
+                        } icon: {
+                            Image(systemName: c.isSRV ? "cloud" : "server.rack")
+                        }
+                    }
+                    .disabled(c.id == session.saved.id)
+                }
+            }
+            Divider()
+            Button("Edit \(session.saved.name)…") { app.editingConnection = app.connections.first { $0.id == session.saved.id } ?? session.saved }
+            Button("New Connection…") { app.editingConnection = SavedConnection(name: "", uri: "mongodb://localhost:27017") }
+            Button("Disconnect") { Task { await app.disconnect() } }
+        } label: {
+            HStack(spacing: 7) {
+                Circle().fill(Color(ns: Theme.hex(session.saved.color))).frame(width: 8, height: 8)
+                Text(session.saved.name).font(.system(size: 12.5, weight: .semibold))
+                if session.isProduction { ProdBadge() }
+                Text(session.saved.host).font(.system(size: 12)).foregroundStyle(Color.cText3)
+                if !session.service.serverVersion.isEmpty {
+                    Text("v\(session.service.serverVersion)").font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.cText2)
+                        .padding(.horizontal, 6).padding(.vertical, 2).background(Color.cPill, in: Capsule())
+                }
+                if session.readOnly {
+                    Label("Read-only", systemImage: "lock.fill").font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.cAmber)
+                }
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(Color.cText3)
+            }
+            .padding(.horizontal, 6)
+        }
+        .menuIndicator(.hidden)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help("Switch connection (⌃⌘1–9)")
     }
 }

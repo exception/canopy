@@ -170,6 +170,7 @@ struct CollectionRow: View {
         a.addButton(withTitle: "Cancel")
         if a.runModal() == .alertFirstButtonReturn {
             Task {
+                guard await session.authorize("drop the collection \(db).\(coll.name)") else { return }
                 try? await session.service.dropCollection(db: db, name: coll.name)
                 if let t = app.tabs.first(where: { $0.kind == .collection(db: db, name: coll.name) }) { app.close(t.id) }
                 await session.loadCollections(db)
