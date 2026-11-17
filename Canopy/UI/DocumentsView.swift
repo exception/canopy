@@ -272,22 +272,50 @@ struct ResultsToolbar: View {
 // MARK: - List view
 
 struct DocumentList: View {
+    @Environment(AppState.self) private var app
     @Bindable var m: DocumentsModel
+    @FocusState private var focused: Bool
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 8) {
-                ForEach(Array(m.docs.enumerated()), id: \.offset) { i, d in
-                    if m.editing == i {
-                        InlineEditor(m: m)
-                    } else {
-                        DocumentCard(m: m, index: i, doc: d)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(Array(m.docs.enumerated()), id: \.offset) { i, d in
+                        Group {
+                            if m.editing == i {
+                                InlineEditor(m: m)
+                            } else {
+                                DocumentCard(m: m, index: i, doc: d)
+                            }
+                        }
+                        .id(i)
                     }
                 }
+                .padding(14)
             }
-            .padding(14)
+            .focusable(m.editing == nil)
+            .focusEffectDisabled()
+            .focused($focused)
+            .onKeyPress(.downArrow) { move(1, proxy); return .handled }
+            .onKeyPress(.upArrow) { move(-1, proxy); return .handled }
+            .onKeyPress(.return) {
+                if let i = m.selected, !m.session.readOnly { m.beginEdit(i); return .handled }
+                return .ignored
+            }
+            .onKeyPress(characters: ["c"], phases: .down) { press in
+                guard press.modifiers.contains(.command), let i = m.selected, m.docs.indices.contains(i) else { return .ignored }
+                app.copy(BFormat.text(m.docs[i], style: .ejson), label: "Copied document")
+                return .handled
+            }
         }
         .background(Color(ns: Theme.window))
+    }
+
+    private func move(_ d: Int, _ proxy: ScrollViewProxy) {
+        guard !m.docs.isEmpty else { return }
+        let next = max(0, min(m.docs.count - 1, (m.selected ?? -1) + d))
+        m.selected = next
+        withAnimation(.snappy(duration: 0.15)) { proxy.scrollTo(next, anchor: .center) }
     }
 }
 
