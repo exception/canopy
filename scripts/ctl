@@ -1,0 +1,3 @@
+#!/bin/zsh
+# Sends one automation command to a Canopy started with CANOPY_CONTROL_PORT.
+print -r -- "$*" | nc -w 600 127.0.0.1 ${CANOPY_CONTROL_PORT:-47199}

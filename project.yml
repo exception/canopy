@@ -1,0 +1,73 @@
+name: Canopy
+options:
+  bundleIdPrefix: dev.canopy
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+
+packages:
+  MongoKitten:
+    url: https://github.com/orlandos-nl/MongoKitten
+    from: "7.17.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    ENABLE_HARDENED_RUNTIME: YES
+    DEAD_CODE_STRIPPING: YES
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  Canopy:
+    type: application
+    platform: macOS
+    sources:
+      - path: Canopy
+      - path: Resources/Assets.xcassets
+    dependencies:
+      - package: MongoKitten
+        product: MongoKitten
+      - package: MongoKitten
+        product: MongoClient
+      - package: MongoKitten
+        product: MongoCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.canopy.app
+        PRODUCT_NAME: Canopy
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Canopy
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: Resources/Canopy.entitlements
+
+  CanopyTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Canopy
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Canopy.app/Contents/MacOS/Canopy"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+schemes:
+  Canopy:
+    build:
+      targets:
+        Canopy: all
+    run:
+      config: Debug
+    test:
+      targets:
+        - CanopyTests
