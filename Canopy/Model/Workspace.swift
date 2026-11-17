@@ -88,6 +88,7 @@ final class DocumentsModel {
     var events: [ChangeEvent] = []
     var liveError: String?
     var newSinceRun = 0
+    var bulk: BulkModel?
     private var liveTask: Task<Void, Never>?
 
     // AI

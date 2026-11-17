@@ -193,6 +193,11 @@ struct ResultsToolbar: View {
             .pickerStyle(.segmented).labelsHidden().frame(width: 110)
             if !m.session.readOnly {
                 PillButton(title: "Insert", icon: "plus") { m.beginInsert() }
+                Menu {
+                    Button("Update matching documents…") { m.bulk = BulkModel(session: m.session, db: m.db, collection: m.collection, kind: .update, filter: m.filterText) }
+                    Button("Delete matching documents…") { m.bulk = BulkModel(session: m.session, db: m.db, collection: m.collection, kind: .delete, filter: m.filterText) }
+                } label: { Label("Bulk", systemImage: "square.stack.3d.forward.dottedline").font(.system(size: 12)) }
+                    .menuStyle(.borderlessButton).fixedSize()
             }
             Menu {
                 Button("Copy page as JSON (Extended JSON)") { app.copy(BFormat.text(.array(m.docs.map { .document($0) }), style: .ejson), label: "Copied \(m.docs.count) documents") }
@@ -242,6 +247,7 @@ struct ResultsToolbar: View {
         }
         .padding(.horizontal, 16).frame(height: 40)
         .background(Color(ns: Theme.window))
+        .sheet(item: $m.bulk) { b in BulkSheet(m: b) { Task { await m.run(resetPage: false) } } }
         .overlay(alignment: .bottom) { Rectangle().fill(Color.cHairline).frame(height: 1) }
     }
 }
@@ -289,6 +295,11 @@ struct DocumentCard: View {
             if hover {
                 HStack(spacing: 2) {
                     iconButton(expandAll ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", expandAll ? "Collapse" : "Expand all") { expandAll.toggle() }
+                    iconButton("sparkles", "Ask Claude about this document", tint: .cAI) {
+                        m.selected = index
+                        app.showCopilot = true
+                        app.copilot.send("Explain this document: what it represents, anything unusual about its values compared with the rest of the collection, and related documents worth looking at.")
+                    }
                     iconButton("doc.on.doc", "Copy as JSON") { app.copy(BFormat.text(doc, style: .ejson), label: "Copied document") }
                     if !m.session.readOnly {
                         iconButton("pencil", "Edit") { m.beginEdit(index) }

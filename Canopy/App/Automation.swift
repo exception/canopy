@@ -10,6 +10,8 @@ enum Automation {
     private static var listener: NWListener?
     private static var recorder: Timer?
     private static var frame = 0
+    private static var frameTimes: [Date] = []
+    private static var recordDir = ""
 
     nonisolated static func startIfRequested() {
         guard let p = ProcessInfo.processInfo.environment["CANOPY_CONTROL_PORT"], let port = NWEndpoint.Port(p) else { return }
@@ -45,11 +47,49 @@ enum Automation {
 
     static var window: NSWindow? { NSApp.windows.first { $0.isVisible && $0.contentView != nil && $0.className.contains("Window") && $0.frame.width > 400 } }
 
-    static func snapshot(_ path: String) -> Bool {
-        guard let v = window?.contentView?.superview ?? window?.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return false }
+    static func snapshot(_ path: String, scale: CGFloat? = nil) -> Bool {
+        guard let v = window?.contentView?.superview ?? window?.contentView else { return false }
+        let rep: NSBitmapImageRep
+        if let scale {
+            guard let r = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(v.bounds.width * scale), pixelsHigh: Int(v.bounds.height * scale),
+                                           bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return false }
+            r.size = v.bounds.size
+            rep = r
+        } else {
+            guard let r = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return false }
+            rep = r
+        }
         v.cacheDisplay(in: v.bounds, to: rep)
+        // Composite an attached sheet (its own window) where it sits on screen.
+        if let w = window, let sheet = w.attachedSheet, let sv = sheet.contentView?.superview ?? sheet.contentView,
+           let srep = sv.bitmapImageRepForCachingDisplay(in: sv.bounds) {
+            sv.cacheDisplay(in: sv.bounds, to: srep)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            let x = sheet.frame.minX - w.frame.minX, y = sheet.frame.minY - w.frame.minY
+            let shadow = NSShadow(); shadow.shadowBlurRadius = 30; shadow.shadowColor = NSColor.black.withAlphaComponent(0.45); shadow.shadowOffset = NSSize(width: 0, height: -8)
+            shadow.set()
+            let path = NSBezierPath(roundedRect: NSRect(x: x, y: y, width: sheet.frame.width, height: sheet.frame.height), xRadius: 14, yRadius: 14)
+            NSColor.windowBackgroundColor.setFill(); path.fill()
+            NSShadow().set()
+            path.addClip()
+            srep.draw(in: NSRect(x: x, y: y, width: sheet.frame.width, height: sheet.frame.height))
+            NSGraphicsContext.restoreGraphicsState()
+        }
         guard let png = rep.representation(using: .png, properties: [:]) else { return false }
         return (try? png.write(to: URL(fileURLWithPath: path))) != nil
+    }
+
+    /// Types text into a field a few characters at a time (for recordings).
+    private static func typeOut(_ text: String, _ set: (String) -> Void) async {
+        guard ProcessInfo.processInfo.environment["CANOPY_TYPE_DELAY"] != "0" else { set(text); return }
+        var s = ""
+        for ch in text {
+            s.append(ch)
+            set(s)
+            try? await Task.sleep(for: .milliseconds(28))
+        }
+        try? await Task.sleep(for: .milliseconds(250))
     }
 
     private static func handle(_ line: String) async -> String {
@@ -67,16 +107,29 @@ enum Automation {
                 let fps = a.count > 2 ? Double(a[2]) ?? 12 : 12
                 try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
                 frame = 0
+                frameTimes = []
+                recordDir = dir
                 recorder?.invalidate()
                 recorder = Timer.scheduledTimer(withTimeInterval: 1 / fps, repeats: true) { _ in
                     Task { @MainActor in
-                        _ = snapshot(String(format: "%@/f%05d.png", dir, frame))
-                        frame += 1
+                        if snapshot(String(format: "%@/f%05d.png", dir, frame), scale: 1) {
+                            frameTimes.append(Date())
+                            frame += 1
+                        }
                     }
                 }
+                RunLoop.main.add(recorder!, forMode: .common)
                 return "ok"
             }
             recorder?.invalidate(); recorder = nil
+            // ffmpeg concat list with real frame durations.
+            var list = ""
+            for i in 0..<frameTimes.count {
+                let d = i + 1 < frameTimes.count ? frameTimes[i + 1].timeIntervalSince(frameTimes[i]) : 0.1
+                list += String(format: "file 'f%05d.png'\nduration %.3f\n", i, d)
+            }
+            if frameTimes.count > 0 { list += String(format: "file 'f%05d.png'\n", frameTimes.count - 1) }
+            try? list.write(toFile: recordDir + "/frames.txt", atomically: true, encoding: .utf8)
             return "ok \(frame) frames"
         case "size":
             let a = arg.split(separator: " ").compactMap { Double($0) }
@@ -105,6 +158,14 @@ enum Automation {
         case "view":
             if let v = DocViewMode.allCases.first(where: { $0.rawValue.lowercased() == arg.lowercased() }) { app.currentTab?.docs.view = v }
             return "ok"
+        case "apply-proposal":
+            for m in app.copilot.messages.reversed() {
+                for p in m.parts.reversed() { if case .proposal(let pr) = p { app.copilot.apply(pr); return "ok" } }
+            }
+            return "none"
+        case "sleep":
+            try? await Task.sleep(for: .milliseconds(Int(arg) ?? 500))
+            return "ok"
         case "filter":
             app.currentTab?.docs.filterText = arg
             await app.currentTab?.docs.run()
@@ -119,18 +180,19 @@ enum Automation {
             return "ok"
         case "ask":
             guard let t = app.currentTab else { return "no tab" }
-            t.docs.askText = arg
+            await typeOut(arg) { t.docs.askText = $0 }
             await AIActions.ask(t.docs)
             return t.docs.askError ?? "ok"
         case "askpipe":
             guard let t = app.currentTab else { return "no tab" }
             t.mode = .aggregations
-            t.agg.askText = arg
+            await typeOut(arg) { t.agg.askText = $0 }
             await AIActions.pipeline(t.agg)
             return t.agg.askError ?? "ok"
         case "copilot":
             app.showCopilot = true
-            app.copilot.send(arg)
+            await typeOut(arg) { app.copilot.input = $0 }
+            app.copilot.send()
             while app.copilot.busy { try? await Task.sleep(for: .milliseconds(200)) }
             return app.copilot.messages.last?.error ?? "ok"
         case "copilot-open": app.showCopilot = arg != "off"; return "ok"
@@ -147,6 +209,14 @@ enum Automation {
             guard let t = app.currentTab else { return "no tab" }
             await AIActions.suggestIndexes(t.indexes)
             return "ok"
+        case "bulk-ai":
+            guard let t = app.currentTab else { return "no tab" }
+            let b = BulkModel(session: t.docs.session, db: t.db, collection: t.collection, kind: .update, filter: t.docs.filterText)
+            t.docs.bulk = b
+            try? await Task.sleep(for: .milliseconds(600))
+            await typeOut(arg) { b.askText = $0 }
+            await AIActions.update(b)
+            return b.askError ?? "ok"
         case "live":
             app.currentTab?.docs.toggleLive()
             return "ok"

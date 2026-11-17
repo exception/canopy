@@ -329,6 +329,21 @@ final class MongoService: @unchecked Sendable {
         ]))]))]), db: db)
     }
 
+    /// `update` is an operator document ({$set: …}) or a pipeline array.
+    func updateMany(db: String, collection: String, filter: BDoc, update: BValue) async throws -> (matched: Int, modified: Int) {
+        let r = try await command(BDoc([("update", .string(collection)), ("updates", .array([.document(BDoc([
+            ("q", .document(filter)), ("u", update), ("multi", .bool(true)),
+        ]))]))]), db: db)
+        return (Int(r["n"]?.number ?? 0), Int(r["nModified"]?.number ?? 0))
+    }
+
+    func deleteMany(db: String, collection: String, filter: BDoc) async throws -> Int {
+        let r = try await command(BDoc([("delete", .string(collection)), ("deletes", .array([.document(BDoc([
+            ("q", .document(filter)), ("limit", .int32(0)),
+        ]))]))]), db: db)
+        return Int(r["n"]?.number ?? 0)
+    }
+
     func createCollection(db: String, name: String) async throws {
         try await command(BDoc([("create", .string(name))]), db: db)
     }

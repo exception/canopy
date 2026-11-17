@@ -320,6 +320,36 @@ enum AIActions {
         } catch { m.suggestNote = "⚠️ " + error.localizedDescription }
     }
 
+    static func update(_ m: BulkModel) async {
+        let request = m.askText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !request.isEmpty else { return }
+        m.askBusy = true
+        m.askError = nil
+        defer { m.askBusy = false }
+        let schema = await schemaText(m.session, m.db, m.collection)
+        let system = """
+        You write MongoDB updateMany arguments for Canopy's bulk update. \(AIPrompts.syntax)
+        Return the filter (which documents) and the update: either an update operator document like { $set: { … } } \
+        or an aggregation pipeline array when the new value depends on other fields. Prefer the narrowest correct filter. \
+        If the request only describes the change, keep the current filter.
+        note: one short sentence saying what will change.
+        """
+        let schemaDef: [String: Any] = ["type": "object", "properties": [
+            "filter": ["type": "string"], "update": ["type": "string"], "note": ["type": "string"],
+        ], "required": ["filter", "update", "note"], "additionalProperties": false]
+        do {
+            let r = try await ClaudeCLI.structured(prompt: AIPrompts.queryRequest(ns: "\(m.db).\(m.collection)", schema: schema, current: "filter \(m.filterText.isEmpty ? "{}" : m.filterText)", request: request), system: system, schema: schemaDef)
+            let f = clean(r["filter"] as? String), u = (r["update"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            _ = try ShellParser.parseDocument(f); _ = try ShellParser.parse(u)
+            m.filterText = f
+            if let v = try? ShellParser.parse(u) { m.updateText = BFormat.text(v) } else { m.updateText = u }
+            m.askNote = r["note"] as? String
+            await m.preview()
+        } catch {
+            m.askError = error.localizedDescription
+        }
+    }
+
     private static func clean(_ s: String?) -> String {
         let t = (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return t == "{}" ? "" : t
