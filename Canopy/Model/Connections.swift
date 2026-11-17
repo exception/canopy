@@ -12,6 +12,8 @@ struct SavedConnection: Codable, Identifiable, Hashable {
     var lastUsed: Date?
     /// Optional so connections saved before this flag existed still decode.
     var production: Bool?
+    /// Folder this connection is filed under in the sidebar (nil = unfiled).
+    var folderID: UUID?
 
     /// Production connections need Touch ID (or the Mac password) for destructive or wide changes.
     var isProduction: Bool {
@@ -106,4 +108,19 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
     var at: Date
     var favorite = false
     var title: String?
+}
+
+/// A named, colored group of connections in the sidebar.
+struct ConnectionFolder: Codable, Identifiable, Hashable {
+    var id = UUID()
+    var name: String
+    var color: UInt32 = 0x7AA2F7
+    var collapsed = false
+}
+
+/// The tabs that were open on a connection, restored when you reconnect.
+struct SavedWorkspace: Codable {
+    struct Tab: Codable { var db: String?; var collection: String?; var server = false; var mode: String; var view: String? }
+    var tabs: [Tab]
+    var current: Int?
 }

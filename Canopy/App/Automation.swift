@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Foundation
 import Network
 
@@ -156,7 +157,7 @@ enum Automation {
             if let mode = WorkspaceMode.allCases.first(where: { $0.rawValue.lowercased().hasPrefix(arg.lowercased()) }) { app.currentTab?.mode = mode }
             return "ok"
         case "view":
-            if let v = DocViewMode.allCases.first(where: { $0.rawValue.lowercased() == arg.lowercased() }) { app.currentTab?.docs.view = v }
+            if let v = DocViewMode.allCases.first(where: { $0.rawValue.lowercased() == arg.lowercased() }) { withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) { app.currentTab?.docs.view = v } }
             return "ok"
         case "apply-proposal":
             for m in app.copilot.messages.reversed() {
@@ -177,6 +178,27 @@ enum Automation {
             return "ok"
         case "select":
             app.currentTab?.docs.selected = Int(arg)
+            return "ok"
+        case "hittest":
+            let a = arg.split(separator: " ").compactMap { Double($0) }
+            guard a.count == 2, let w = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.titled) }) else { return "hittest x y" }
+            return TitlebarDoubleClick.describe(a[0], a[1], in: w)
+        case "zoom":
+            guard let w = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.titled) }) else { return "no window" }
+            TitlebarDoubleClick.perform(on: w)
+            return "\(Int(w.frame.width))x\(Int(w.frame.height))"
+        case "toggle-folder":
+            guard let f = app.folders.first(where: { $0.name == arg }) else { return "no such folder" }
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { app.toggleFolder(f.id) }
+            return "ok"
+        case "new-folder":
+            let f = app.newFolder(arg.isEmpty ? "New Folder" : arg)
+            return f.id.uuidString
+        case "move":
+            // move <connection name> -> <folder name | none>
+            let parts = arg.components(separatedBy: " -> ")
+            guard parts.count == 2, let c = app.connections.first(where: { $0.name == parts[0] }) else { return "move <conn> -> <folder>" }
+            app.move(c.id, to: app.folders.first { $0.name == parts[1] }?.id)
             return "ok"
         case "delete":
             guard let t = app.currentTab, let i = Int(arg) else { return "delete <row>" }

@@ -204,10 +204,7 @@ struct ResultsToolbar: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Picker("", selection: $m.view) {
-                ForEach(DocViewMode.allCases) { v in Image(systemName: v.icon).help(v.rawValue).tag(v) }
-            }
-            .pickerStyle(.segmented).labelsHidden().frame(width: 110)
+            ViewModeSwitch(selection: $m.view)
             if !m.session.readOnly {
                 PillButton(title: "Insert", icon: "plus") { m.beginInsert() }
                 Menu {
@@ -359,8 +356,12 @@ struct DocumentCard: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture { m.selected = index }
-        .onTapGesture(count: 2) { if !m.session.readOnly { m.beginEdit(index) } }
+        // One tap handler that reads the click count. Pairing onTapGesture with
+        // onTapGesture(count: 2) makes SwiftUI hold every single click for the double-click
+        // interval (~0.3 s), which delayed every chevron inside the card.
+        .simultaneousGesture(TapGesture().onEnded {
+            if (NSApp.currentEvent?.clickCount ?? 1) >= 2, !m.session.readOnly { m.beginEdit(index) } else { m.selected = index }
+        })
         .onHover { hover = $0 }
     }
 
@@ -439,6 +440,7 @@ struct TreeRow: View {
     var expandAll: Bool
     var onFilter: ((String, BValue) -> Void)? = nil
     @State private var open: Bool?
+    @State private var showAllItems = false
 
     var body: some View {
         let isOpen = open ?? expandAll
@@ -447,6 +449,7 @@ struct TreeRow: View {
                 if value.isContainer {
                     Image(systemName: "chevron.right").font(.system(size: 8.5, weight: .bold)).foregroundStyle(Color.cText3)
                         .rotationEffect(.degrees(isOpen ? 90 : 0)).frame(width: 12)
+                        .animation(.snappy(duration: 0.12), value: isOpen)
                 } else {
                     Spacer().frame(width: 12)
                 }
@@ -456,7 +459,8 @@ struct TreeRow: View {
             }
             .padding(.leading, CGFloat(depth) * 16)
             .contentShape(Rectangle())
-            .onTapGesture { if value.isContainer { withAnimation(.snappy(duration: 0.15)) { open = !isOpen } } }
+            // Children appear at once; animating the insertion made the whole lazy list re-layout per frame.
+            .onTapGesture { if value.isContainer { open = !isOpen } }
             .contextMenu {
                 if !value.isContainer, let onFilter {
                     Button("Filter where \(path) = \(BFormat.preview(value, max: 40))") { onFilter(path, value) }
@@ -476,7 +480,13 @@ struct TreeRow: View {
                 case .document(let d):
                     ForEach(Array(d.fields.enumerated()), id: \.offset) { _, f in TreeRow(key: f.key, path: path + "." + f.key, value: f.value, depth: depth + 1, expandAll: expandAll, onFilter: onFilter) }
                 case .array(let a):
-                    ForEach(Array(a.prefix(200).enumerated()), id: \.offset) { i, v in TreeRow(key: "\(i)", path: v.isContainer ? path + ".\(i)" : path, value: v, depth: depth + 1, expandAll: expandAll, onFilter: onFilter) }
+                    let shown = showAllItems ? min(a.count, 5000) : min(a.count, 50)
+                    ForEach(0..<shown, id: \.self) { i in TreeRow(key: "\(i)", path: a[i].isContainer ? path + ".\(i)" : path, value: a[i], depth: depth + 1, expandAll: expandAll, onFilter: onFilter) }
+                    if a.count > shown {
+                        Button(showAllItems ? "\(a.count - shown) more not shown" : "Show all \(Fmt.count(a.count)) items") { showAllItems = true }
+                            .buttonStyle(.plain).font(.system(size: 11.5)).foregroundStyle(Color.cAccent)
+                            .padding(.leading, CGFloat(depth + 1) * 16 + 16).disabled(showAllItems)
+                    }
                 default: EmptyView()
                 }
             }

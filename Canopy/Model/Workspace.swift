@@ -19,7 +19,7 @@ enum DocViewMode: String, CaseIterable, Identifiable {
     case list = "List", table = "Table", json = "JSON"
     var id: String { rawValue }
     var icon: String {
-        switch self { case .list: return "list.bullet.indent"; case .table: return "tablecells"; case .json: return "curlybraces" }
+        switch self { case .list: return "rectangle.grid.1x2"; case .table: return "tablecells"; case .json: return "curlybraces" }
     }
 }
 

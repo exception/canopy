@@ -75,6 +75,7 @@ extension Notification.Name {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
         Automation.startIfRequested()
+        Task { @MainActor in TitlebarDoubleClick.install() }
         Task { @MainActor in ToolServer.shared.start() }
         if let auto = ProcessInfo.processInfo.environment["CANOPY_AUTOCONNECT"] {
             Task { @MainActor in
@@ -82,6 +83,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let c = app.connections.first(where: { $0.name == auto }) { await app.connect(c) }
             }
         }
+    }
+
+    func applicationWillTerminate(_ n: Notification) {
+        MainActor.assumeIsolated { AppState.shared.saveWorkspace() }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

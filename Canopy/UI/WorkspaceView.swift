@@ -173,3 +173,50 @@ struct AskBar: View {
         .onReceive(NotificationCenter.default.publisher(for: .focusAsk)) { _ in focused = true }
     }
 }
+
+/// List / Table / JSON switch: a raised thumb that slides between icons, and the picked
+/// icon gives a small bounce. The label of the picked mode slides out next to its icon.
+struct ViewModeSwitch: View {
+    @Binding var selection: DocViewMode
+    @Namespace private var ns
+    @State private var hovered: DocViewMode?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(DocViewMode.allCases) { v in
+                let on = selection == v
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) { selection = v }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: v.icon)
+                            .font(.system(size: 12, weight: on ? .semibold : .regular))
+                            .symbolEffect(.bounce.down, value: on)
+                        if on {
+                            Text(v.rawValue).font(.system(size: 11.5, weight: .semibold))
+                                .transition(.asymmetric(insertion: .opacity.combined(with: .move(edge: .leading)), removal: .opacity))
+                        }
+                    }
+                    .foregroundStyle(on ? Color.cAccent : hovered == v ? Color.cText : Color.cText2)
+                    .padding(.horizontal, on ? 10 : 8).frame(height: 26)
+                    .background {
+                        if on {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color.cRaised)
+                                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Color.cAccent.opacity(0.35), lineWidth: 0.75))
+                                .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
+                                .matchedGeometryEffect(id: "thumb", in: ns)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { hovered = $0 ? v : (hovered == v ? nil : hovered) }
+                .help("\(v.rawValue) view")
+            }
+        }
+        .padding(2)
+        .background(Color.cPill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .fixedSize()
+    }
+}

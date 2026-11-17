@@ -7,6 +7,9 @@ final class AppState {
     static let shared = AppState()
 
     var connections: [SavedConnection] = Storage.load("connections.json", as: [SavedConnection].self) ?? []
+    var folders: [ConnectionFolder] = Storage.load("folders.json", as: [ConnectionFolder].self) ?? []
+    /// Open tabs per connection id.
+    private var workspaces: [String: SavedWorkspace] = Storage.load("workspaces.json", as: [String: SavedWorkspace].self) ?? [:]
     var session: Session?
     var connecting: UUID?
     var connectError: String?
@@ -54,7 +57,7 @@ final class AppState {
         do {
             let uri = ConnectionString.join(c.uri, password: Keychain.get(c.id))
             let svc = try await MongoService.connect(uri: uri)
-            if let old = session { await old.service.disconnect() }
+            if let old = session { saveWorkspace(); stopAllLive(); await old.service.disconnect() }
             let s = Session(saved: c, service: svc)
             session = s
             tabs = []
@@ -64,6 +67,7 @@ final class AppState {
             await s.refresh()
             // Expand the user databases so the tree isn't empty.
             for db in s.databases.prefix(3) where !["admin", "config", "local"].contains(db.name) { s.toggle(db.name) }
+            restoreWorkspace(for: c)
         } catch {
             connectError = "\(c.name): \(error.localizedDescription)"
         }
@@ -71,12 +75,94 @@ final class AppState {
 
     func disconnect() async {
         guard let s = session else { return }
+        saveWorkspace()
+        stopAllLive()
         session = nil
         tabs = []
         currentTabID = nil
         copilot.reset()
         await s.service.disconnect()
     }
+
+    // MARK: Folders
+
+    func saveFolders() { Storage.save(folders, "folders.json") }
+
+    @discardableResult
+    func newFolder(_ name: String = "New Folder") -> ConnectionFolder {
+        let palette: [UInt32] = [0x7AA2F7, 0xBB9AF7, 0x3DD68C, 0xF5A524, 0xFF5D5D, 0x2AC3DE]
+        let f = ConnectionFolder(name: name, color: palette[folders.count % palette.count])
+        folders.append(f)
+        saveFolders()
+        return f
+    }
+
+    func renameFolder(_ id: UUID, to name: String) {
+        guard let i = folders.firstIndex(where: { $0.id == id }), !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        folders[i].name = name.trimmingCharacters(in: .whitespaces)
+        saveFolders()
+    }
+
+    func recolorFolder(_ id: UUID, _ color: UInt32) {
+        guard let i = folders.firstIndex(where: { $0.id == id }) else { return }
+        folders[i].color = color
+        saveFolders()
+    }
+
+    func toggleFolder(_ id: UUID) {
+        guard let i = folders.firstIndex(where: { $0.id == id }) else { return }
+        folders[i].collapsed.toggle()
+        saveFolders()
+    }
+
+    /// Deleting a folder keeps its connections; they move back to the unfiled list.
+    func deleteFolder(_ id: UUID) {
+        folders.removeAll { $0.id == id }
+        for i in connections.indices where connections[i].folderID == id { connections[i].folderID = nil }
+        saveFolders()
+        saveConnections()
+    }
+
+    func move(_ connectionID: UUID, to folder: UUID?) {
+        guard let i = connections.firstIndex(where: { $0.id == connectionID }), connections[i].folderID != folder else { return }
+        connections[i].folderID = folder
+        if let folder, let f = folders.firstIndex(where: { $0.id == folder }) { folders[f].collapsed = false; saveFolders() }
+        saveConnections()
+    }
+
+    func connections(in folder: UUID?) -> [SavedConnection] {
+        let known = Set(folders.map(\.id))
+        return connections
+            .filter { folder == nil ? ($0.folderID.map { !known.contains($0) } ?? true) : $0.folderID == folder }
+            .sorted { ($0.favorite ? 0 : 1, $0.name.lowercased()) < ($1.favorite ? 0 : 1, $1.name.lowercased()) }
+    }
+
+    // MARK: Workspace restore
+
+    func saveWorkspace() {
+        guard let s = session else { return }
+        let tabs = self.tabs.map { t in
+            t.kind == .server ? SavedWorkspace.Tab(server: true, mode: t.mode.rawValue)
+                              : SavedWorkspace.Tab(db: t.db, collection: t.collection, mode: t.mode.rawValue, view: t.docs.view.rawValue)
+        }
+        workspaces[s.saved.id.uuidString] = SavedWorkspace(tabs: tabs, current: self.tabs.firstIndex { $0.id == currentTabID })
+        Storage.save(workspaces, "workspaces.json")
+    }
+
+    private func restoreWorkspace(for c: SavedConnection) {
+        guard let w = workspaces[c.id.uuidString], !w.tabs.isEmpty else { return }
+        for t in w.tabs {
+            if t.server { openServer() }
+            else if let db = t.db, let coll = t.collection {
+                let tab = open(db: db, collection: coll, newTab: true)
+                tab.mode = WorkspaceMode(rawValue: t.mode) ?? .documents
+                if let v = t.view.flatMap(DocViewMode.init(rawValue:)) { tab.docs.view = v }
+            }
+        }
+        if let i = w.current, tabs.indices.contains(i) { currentTabID = tabs[i].id }
+    }
+
+    private func stopAllLive() { for t in tabs { t.docs.stopLive() } }
 
     @discardableResult
     func open(db: String, collection: String, newTab: Bool = false) -> WorkspaceTab {

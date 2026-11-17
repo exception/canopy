@@ -1,28 +1,129 @@
 import SwiftUI
 
-/// Sidebar list of saved connections (when disconnected).
+/// Sidebar list of saved connections (when disconnected), grouped into folders.
 struct ConnectionList: View {
     @Environment(AppState.self) private var app
+    @State private var renaming: UUID?
+    @State private var unfiledTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("CONNECTIONS").font(.system(size: 10.5, weight: .semibold)).tracking(0.6).foregroundStyle(Color.cText3)
-                .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
+            HStack {
+                Text("CONNECTIONS").font(.system(size: 10.5, weight: .semibold)).tracking(0.6).foregroundStyle(Color.cText3)
+                Spacer()
+                Button { renaming = app.newFolder().id } label: { Image(systemName: "folder.badge.plus").font(.system(size: 12)) }
+                    .buttonStyle(.borderless).foregroundStyle(Color.cText3).help("New folder")
+            }
+            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
             ScrollView {
                 VStack(spacing: 1) {
-                    ForEach(app.connections.sorted { ($0.favorite ? 0 : 1, -($0.lastUsed?.timeIntervalSince1970 ?? 0)) < ($1.favorite ? 0 : 1, -($1.lastUsed?.timeIntervalSince1970 ?? 0)) }) { c in
-                        ConnectionRow(c: c)
+                    ForEach(app.folders) { f in
+                        FolderSection(folder: f, renaming: $renaming)
                     }
+                    let unfiled = app.connections(in: nil)
+                    VStack(spacing: 1) {
+                        ForEach(unfiled) { c in ConnectionRow(c: c) }
+                        if unfiled.isEmpty && !app.folders.isEmpty {
+                            Text("Drop here to take out of a folder").font(.system(size: 11)).foregroundStyle(Color.cText3)
+                                .frame(maxWidth: .infinity).padding(.vertical, 10).opacity(unfiledTargeted ? 1 : 0.6)
+                        }
+                    }
+                    .padding(.top, app.folders.isEmpty ? 0 : 6)
+                    .background(unfiledTargeted ? Color.cAccent.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .dropDestination(for: String.self) { ids, _ in
+                        ids.compactMap(UUID.init).forEach { id in withAnimation(.snappy) { app.move(id, to: nil) } }
+                        return true
+                    } isTargeted: { unfiledTargeted = $0 }
                 }
                 .padding(.horizontal, 6)
             }
-            Spacer()
+            Spacer(minLength: 0)
             Button { app.editingConnection = SavedConnection(name: "", uri: "mongodb://localhost:27017") } label: {
                 Label("New connection", systemImage: "plus").font(.system(size: 12.5))
             }
             .buttonStyle(.borderless)
             .padding(12)
         }
+    }
+}
+
+/// One folder: a header that collapses with a spring, and its connections.
+struct FolderSection: View {
+    @Environment(AppState.self) private var app
+    let folder: ConnectionFolder
+    @Binding var renaming: UUID?
+    @State private var name = ""
+    @State private var targeted = false
+    @State private var hover = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let items = app.connections(in: folder.id)
+        VStack(spacing: 1) {
+            HStack(spacing: 7) {
+                Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).foregroundStyle(Color.cText3)
+                    .rotationEffect(.degrees(folder.collapsed ? 0 : 90))
+                Image(systemName: folder.collapsed ? "folder.fill" : "folder").font(.system(size: 12.5))
+                    .foregroundStyle(Color(ns: Theme.hex(folder.color)))
+                    .contentTransition(.symbolEffect(.replace))
+                if renaming == folder.id {
+                    TextField("Folder name", text: $name).textFieldStyle(.plain).font(.system(size: 12.5, weight: .semibold))
+                        .focused($focused)
+                        .onSubmit { commit() }
+                        .onExitCommand { renaming = nil }
+                        .onAppear { name = folder.name; DispatchQueue.main.async { focused = true } }
+                        .onChange(of: focused) { _, f in if !f { commit() } }
+                } else {
+                    Text(folder.name).font(.system(size: 12.5, weight: .semibold)).lineLimit(1)
+                }
+                Spacer()
+                Text("\(items.count)").font(.system(size: 10.5, weight: .medium).monospacedDigit()).foregroundStyle(Color.cText3)
+                    .padding(.horizontal, 6).padding(.vertical, 1).background(Color.cPill, in: Capsule())
+            }
+            .padding(.horizontal, 8).frame(height: 28)
+            .background(targeted ? Color(ns: Theme.hex(folder.color, 0.18)) : hover ? Color(ns: Theme.hover) : .clear,
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay {
+                if targeted { RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Color(ns: Theme.hex(folder.color)), lineWidth: 1.5) }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { app.toggleFolder(folder.id) } }
+            .onHover { hover = $0 }
+            .contextMenu {
+                Button("Rename…") { renaming = folder.id }
+                Menu("Color") {
+                    ForEach(Theme.connectionColors, id: \.1) { n, hex in Button(n) { app.recolorFolder(folder.id, hex) } }
+                }
+                Button("New Connection in Folder…") {
+                    var c = SavedConnection(name: "", uri: "mongodb://localhost:27017"); c.folderID = folder.id
+                    app.editingConnection = c
+                }
+                Divider()
+                Button("Delete Folder (keeps connections)", role: .destructive) { withAnimation(.snappy) { app.deleteFolder(folder.id) } }
+            }
+            .dropDestination(for: String.self) { ids, _ in
+                ids.compactMap(UUID.init).forEach { id in withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { app.move(id, to: folder.id) } }
+                return true
+            } isTargeted: { t in withAnimation(.easeOut(duration: 0.12)) { targeted = t } }
+
+            if !folder.collapsed {
+                VStack(spacing: 1) {
+                    ForEach(items) { c in ConnectionRow(c: c).padding(.leading, 14) }
+                    if items.isEmpty {
+                        Text("Drag connections here").font(.system(size: 11)).foregroundStyle(Color.cText3)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 36).padding(.vertical, 6)
+                    }
+                }
+                .transition(.asymmetric(insertion: .opacity.combined(with: .move(edge: .top)), removal: .opacity))
+            }
+        }
+        .clipped()
+    }
+
+    private func commit() {
+        guard renaming == folder.id else { return }
+        app.renameFolder(folder.id, to: name)
+        renaming = nil
     }
 }
 
@@ -36,7 +137,7 @@ struct ConnectionRow: View {
             RoundedRectangle(cornerRadius: 3).fill(Color(ns: Theme.hex(c.color))).frame(width: 4, height: 26)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
-                    Text(c.name).font(.system(size: 12.5, weight: .medium))
+                    Text(c.name).font(.system(size: 12.5, weight: .medium)).lineLimit(1)
                     if c.favorite { Image(systemName: "star.fill").font(.system(size: 8.5)).foregroundStyle(Color.cAmber) }
                     if c.isProduction { ProdBadge(small: true) }
                     if c.readOnly { Image(systemName: "lock.fill").font(.system(size: 8.5)).foregroundStyle(Color.cText3) }
@@ -51,13 +152,37 @@ struct ConnectionRow: View {
         .contentShape(Rectangle())
         .onTapGesture { Task { await app.connect(c) } }
         .onHover { hover = $0 }
+        .draggable(c.id.uuidString) {
+            HStack(spacing: 6) {
+                Circle().fill(Color(ns: Theme.hex(c.color))).frame(width: 8, height: 8)
+                Text(c.name).font(.system(size: 12.5, weight: .medium))
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6).background(Color.cRaised, in: Capsule())
+        }
         .contextMenu {
             Button("Connect") { Task { await app.connect(c) } }
             Button("Edit…") { app.editingConnection = c }
             Button(c.favorite ? "Unfavorite" : "Favorite") { var x = c; x.favorite.toggle(); app.upsert(x, password: nil) }
             Button("Duplicate") { var x = c; x.id = UUID(); x.name += " copy"; app.upsert(x, password: Keychain.get(c.id)) }
+            FolderMenu(c: c)
             Divider()
             Button("Delete", role: .destructive) { app.remove(c) }
+        }
+    }
+}
+
+/// "Move to Folder" submenu shared by connection rows.
+struct FolderMenu: View {
+    @Environment(AppState.self) private var app
+    let c: SavedConnection
+    var body: some View {
+        Menu("Move to Folder") {
+            ForEach(app.folders) { f in
+                Button(f.name) { withAnimation(.snappy) { app.move(c.id, to: f.id) } }.disabled(c.folderID == f.id)
+            }
+            if !app.folders.isEmpty { Divider() }
+            Button("New Folder…") { let f = app.newFolder(); withAnimation(.snappy) { app.move(c.id, to: f.id) } }
+            if c.folderID != nil { Button("Remove from Folder") { withAnimation(.snappy) { app.move(c.id, to: nil) } } }
         }
     }
 }
@@ -77,13 +202,34 @@ struct ConnectView: View {
                         Text("A fast, native home for your MongoDB data.").font(.system(size: 13)).foregroundStyle(Color.cText2)
                     }
                 }
-                VStack(spacing: 0) {
-                    ForEach(Array(app.connections.enumerated()), id: \.element.id) { i, c in
-                        if i > 0 { Divider().padding(.leading, 44) }
-                        BigConnectionRow(c: c)
+                let groups: [(ConnectionFolder?, [SavedConnection])] =
+                    app.folders.map { ($0, app.connections(in: $0.id)) }.filter { !$0.1.isEmpty } + [(nil, app.connections(in: nil))]
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(groups.filter { !$0.1.isEmpty }, id: \.0?.id) { folder, items in
+                            VStack(alignment: .leading, spacing: 6) {
+                                if let folder {
+                                    Label(folder.name.uppercased(), systemImage: "folder.fill")
+                                        .font(.system(size: 10.5, weight: .semibold)).tracking(0.5)
+                                        .foregroundStyle(Color(ns: Theme.hex(folder.color)))
+                                        .padding(.leading, 4)
+                                } else if groups.count > 1 {
+                                    Text("OTHER").font(.system(size: 10.5, weight: .semibold)).tracking(0.5).foregroundStyle(Color.cText3).padding(.leading, 4)
+                                }
+                                VStack(spacing: 0) {
+                                    ForEach(Array(items.enumerated()), id: \.element.id) { i, c in
+                                        if i > 0 { Divider().padding(.leading, 56) }
+                                        BigConnectionRow(c: c)
+                                    }
+                                }
+                                .card(12)
+                            }
+                        }
                     }
                 }
-                .card(12)
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxHeight: 520)
+                .fixedSize(horizontal: false, vertical: true)
                 if let e = app.connectError {
                     Label(e, systemImage: "exclamationmark.triangle.fill").font(.system(size: 12)).foregroundStyle(Color.cRed).textSelection(.enabled)
                 }
@@ -146,6 +292,8 @@ struct BigConnectionRow: View {
         .onHover { hover = $0 }
         .contextMenu {
             Button("Edit…") { app.editingConnection = c }
+            FolderMenu(c: c)
+            Divider()
             Button("Delete", role: .destructive) { app.remove(c) }
         }
     }
@@ -177,6 +325,12 @@ struct ConnectionEditor: View {
                 Picker("Color", selection: $connection.color) {
                     ForEach(Theme.connectionColors, id: \.1) { name, hex in
                         Label { Text(name) } icon: { Image(systemName: "circle.fill").foregroundStyle(Color(ns: Theme.hex(hex))) }.tag(hex)
+                    }
+                }
+                Picker("Folder", selection: $connection.folderID) {
+                    Text("None").tag(UUID?.none)
+                    ForEach(app.folders) { f in
+                        Label { Text(f.name) } icon: { Image(systemName: "folder.fill").foregroundStyle(Color(ns: Theme.hex(f.color))) }.tag(UUID?.some(f.id))
                     }
                 }
                 Toggle(isOn: $connection.isProduction) {
