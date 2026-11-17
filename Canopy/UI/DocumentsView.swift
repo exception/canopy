@@ -3,6 +3,7 @@ import SwiftUI
 struct DocumentsView: View {
     @Environment(AppState.self) private var app
     @Bindable var m: DocumentsModel
+    @State private var dropping = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,6 +19,22 @@ struct DocumentsView: View {
                     Rectangle().fill(Color.cHairline).frame(width: 1)
                     DocumentInspector(m: m).frame(width: 400)
                 }
+            }
+            .overlay {
+                if dropping {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.cAccent, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                        .background(Color.cAccent.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(Label("Drop JSON, NDJSON or CSV to import into \(m.collection)", systemImage: "square.and.arrow.down").font(.system(size: 14, weight: .semibold)).foregroundStyle(Color.cAccent))
+                        .padding(10)
+                }
+            }
+            .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
+                guard let p = providers.first else { return false }
+                _ = p.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    Task { @MainActor in await m.importFile(url, app: app) }
+                }
+                return true
             }
         }
     }

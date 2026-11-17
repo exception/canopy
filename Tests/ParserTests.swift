@@ -90,4 +90,14 @@ final class ParserTests: XCTestCase {
         XCTAssertNil(Fuzzy.score("xyz", "orders"))
         XCTAssertGreaterThan(Fuzzy.score("ord", "orders")!, Fuzzy.score("ord", "a_random_order_thing")!)
     }
+
+    func testCSVImport() {
+        let docs = Importer.csv("name,age,address.city,note\nAna,31,Rosario,\"likes, commas\"\nBruno,,Córdoba,\"say \"\"hi\"\"\"\n")
+        XCTAssertEqual(docs.count, 2)
+        XCTAssertEqual(docs[0]["age"], .int32(31))
+        XCTAssertEqual(docs[0]["address"]?.doc?["city"], .string("Rosario"))
+        XCTAssertEqual(docs[0]["note"], .string("likes, commas"))
+        XCTAssertEqual(docs[1]["age"], .null)
+        XCTAssertEqual(docs[1]["note"], .string("say \"hi\""))
+    }
 }
