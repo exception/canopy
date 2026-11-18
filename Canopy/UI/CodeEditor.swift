@@ -101,6 +101,10 @@ struct CodeEditor: NSViewRepresentable {
                 if rest.hasPrefix(":") { insert.removeLast(2) }
             }
             tv.insertText(insert, replacementRange: r)
+            if item.caretBack > 0 {
+                let end = r.location + (insert as NSString).length
+                tv.setSelectedRange(NSRange(location: max(r.location, end - item.caretBack), length: 0))
+            }
         }
 
         func apply(_ s: String) {

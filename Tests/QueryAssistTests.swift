@@ -44,6 +44,41 @@ final class QueryAssistTests: XCTestCase {
         XCTAssertNil(try complete("{ status: [ \"re"))  // inside an array: no key context
     }
 
+    func testConstructors() throws {
+        let r = try XCTUnwrap(complete("{ owner: Obje"))
+        XCTAssertEqual(r.items.first?.insert, "ObjectId(\"\")")
+        XCTAssertEqual(r.items.first?.caretBack, 2)
+        XCTAssertEqual(r.range.length, 4)
+        XCTAssertEqual(try complete("{ owner: obj")?.items.first?.label, "ObjectId(\"\")")   // any case
+        XCTAssertEqual(try complete("{ owner: { $in: [ObjectId(\"a\"), Obj")?.items.first?.label, "ObjectId(\"\")")
+        XCTAssertEqual(try complete("{ createdAt: { $gte: IS")?.items.map(\.label), ["ISODate(\"\")"])
+        XCTAssertEqual(try complete("{ done: tr")?.items.map(\.label), ["true"])
+        XCTAssertNil(try complete("{ owner: \"Obj"))         // inside a string
+        XCTAssertNil(try complete("{ Obj"))                   // key position: fields only
+    }
+
+    func testTypedEmptyValue() throws {
+        // A Date field offers ISODate before anything is typed; other fields stay quiet.
+        XCTAssertEqual(try complete("{ createdAt: ")?.items.map(\.label), ["ISODate(\"\")"])
+        XCTAssertNil(try complete("{ shipping: "))
+    }
+
+    func testReferenceLinker() {
+        let l = ReferenceLinker(db: "app", collections: ["auction_requests", "dealerships", "users", "companies", "vehicleModels"])
+        XCTAssertEqual(l.target(forKey: "auction_request"), "auction_requests")
+        XCTAssertEqual(l.target(forKey: "auctionRequestId"), "auction_requests")
+        XCTAssertEqual(l.target(forKey: "dealership_id"), "dealerships")
+        XCTAssertEqual(l.target(forKey: "dealershipIds"), "dealerships")
+        XCTAssertEqual(l.target(forKey: "seller_dealership"), "dealerships")
+        XCTAssertEqual(l.target(forKey: "company"), "companies")
+        XCTAssertEqual(l.target(forKey: "vehicle_model_id"), "vehicleModels")
+        XCTAssertEqual(l.target(forKey: "user"), "users")
+        XCTAssertNil(l.target(forKey: "price"))
+        XCTAssertEqual(ReferenceLinker.filter(for: .objectId("abc")), "{ _id: ObjectId(\"abc\") }")
+        XCTAssertEqual(ReferenceLinker.filter(for: .array([.objectId("a"), .objectId("b")])), "{ _id: { $in: [ObjectId(\"a\"), ObjectId(\"b\")] } }")
+        XCTAssertNil(ReferenceLinker.filter(for: .string("abc")))
+    }
+
     func testPresets() throws {
         let c = try catalog()
         XCTAssertTrue(QueryPresets.sorts(c).contains { $0.sort == "{ createdAt: -1 }" })

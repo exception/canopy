@@ -78,8 +78,31 @@ enum Automation {
             srep.draw(in: NSRect(x: x, y: y, width: sheet.frame.width, height: sheet.frame.height))
             NSGraphicsContext.restoreGraphicsState()
         }
+        // Child panels (the completion popup) are their own windows too.
+        if let w = window {
+            for child in w.childWindows ?? [] where child.isVisible && child.attachedSheet == nil && child !== w.attachedSheet {
+                guard let cv = child.contentView, let crep = cv.bitmapImageRepForCachingDisplay(in: cv.bounds) else { continue }
+                cv.cacheDisplay(in: cv.bounds, to: crep)
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+                let shadow = NSShadow(); shadow.shadowBlurRadius = 16; shadow.shadowColor = NSColor.black.withAlphaComponent(0.35); shadow.shadowOffset = NSSize(width: 0, height: -4)
+                shadow.set()
+                crep.draw(in: NSRect(x: child.frame.minX - w.frame.minX, y: child.frame.minY - w.frame.minY, width: child.frame.width, height: child.frame.height))
+                NSGraphicsContext.restoreGraphicsState()
+            }
+        }
         guard let png = rep.representation(using: .png, properties: [:]) else { return false }
         return (try? png.write(to: URL(fileURLWithPath: path))) != nil
+    }
+
+    /// The query bar's filter editor (the first code editor in the window).
+    private static func filterTextView() -> CodeTextView? {
+        func find(_ v: NSView) -> CodeTextView? {
+            if let t = v as? CodeTextView { return t }
+            for s in v.subviews { if let t = find(s) { return t } }
+            return nil
+        }
+        return window?.contentView.flatMap(find)
     }
 
     /// Types text into a field a few characters at a time (for recordings).
@@ -186,6 +209,29 @@ enum Automation {
             guard let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return "error" }
             v.cacheDisplay(in: v.bounds, to: rep)
             return (try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: arg))) != nil ? "ok" : "error"
+        case "type":
+            // type <text>: types into the filter editor like the keyboard would, so autocomplete runs.
+            guard let tv = filterTextView() else { return "no editor" }
+            if tv.window?.firstResponder !== tv {
+                tv.window?.makeFirstResponder(tv)
+                tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0))
+            }
+            for ch in arg { tv.insertText(String(ch), replacementRange: tv.selectedRange()); try? await Task.sleep(for: .milliseconds(20)) }
+            return "ok"
+        case "key":
+            // key return|tab|escape|down|up: a key press in the filter editor.
+            guard let tv = filterTextView() else { return "no editor" }
+            let sel: Selector = ["return": #selector(NSResponder.insertNewline(_:)), "tab": #selector(NSResponder.insertTab(_:)),
+                                 "escape": #selector(NSResponder.cancelOperation(_:)), "down": #selector(NSResponder.moveDown(_:)),
+                                 "up": #selector(NSResponder.moveUp(_:))][arg] ?? #selector(NSResponder.insertNewline(_:))
+            tv.doCommand(by: sel)
+            return "ok \(tv.string) caret=\(tv.selectedRange().location)"
+        case "click-ref":
+            // click-ref <field>: follows the reference link on the selected document's field.
+            guard let m = app.currentTab?.docs, let i = m.selected ?? (m.docs.isEmpty ? nil : 0), let v = m.docs[i][arg],
+                  let refs = app.referenceLinker(db: m.db), let target = refs.target(forKey: arg), let f = ReferenceLinker.filter(for: v) else { return "no reference" }
+            app.openReference(db: m.db, collection: target, filter: f)
+            return "ok \(target) \(f)"
         case "select":
             app.currentTab?.docs.selected = Int(arg)
             return "ok"

@@ -153,6 +153,9 @@ struct Suggestion: Hashable {
     var label: String
     var insert: String
     var detail: String
+    /// Where the caret lands, counted back from the end of `insert`: 2 puts it
+    /// between the quotes of `ObjectId("")`.
+    var caretBack: Int = 0
 }
 
 struct CompletionResult {
@@ -169,6 +172,20 @@ enum QueryCompletion {
         ("$all", "contains all"), ("$type", "BSON type"), ("$expr", "expression"), ("$text", "text search"),
         ("$search", "text query"), ("$near", "geo near"), ("$geoWithin", "geo within"), ("$mod", "modulo"),
     ]
+
+    /// Shell constructors offered where a value goes. `caretBack` lands the caret inside.
+    static let constructors: [(name: String, insert: String, caretBack: Int, type: String)] = [
+        ("ObjectId", "ObjectId(\"\")", 2, "ObjectId"),
+        ("ISODate", "ISODate(\"\")", 2, "Date"),
+        ("NumberLong", "NumberLong()", 1, "Int64"),
+        ("NumberInt", "NumberInt()", 1, "Int32"),
+        ("NumberDecimal", "NumberDecimal(\"\")", 2, "Decimal128"),
+        ("UUID", "UUID(\"\")", 2, "UUID"),
+        ("RegExp", "RegExp(\"\")", 2, "RegExp"),
+        ("Timestamp", "Timestamp()", 1, "Timestamp"),
+        ("BinData", "BinData(0, \"\")", 2, "Binary"),
+    ]
+    static let literals = ["true", "false", "null"]
 
     private static func isWord(_ c: unichar) -> Bool {
         (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 || c == 46 || c == 36
@@ -210,9 +227,14 @@ enum QueryCompletion {
             return items.isEmpty ? nil : CompletionResult(range: NSRange(location: start, length: cursor - start), items: Array(items.prefix(40)))
         }
 
-        // Value position: `field: |` — offer the values seen for that field.
-        if prev == 58, let field = keyBefore(s, colon: k - 1), let values = catalog.values[field] {
-            let items: [Suggestion] = values.compactMap { v in
+        // Value position: `field: |`, or an item in `[ … ]`.
+        let inArray = prev == 91 || (prev == 44 && innermostOpen(s, before: k - 1) == 91)
+        guard prev == 58 || inArray else { return nil }
+        let field = prev == 58 ? keyBefore(s, colon: k - 1) : nil
+        var items: [Suggestion] = []
+        // Values seen for that field.
+        if let field, let values = catalog.values[field] {
+            items = values.compactMap { v in
                 let lit = BFormat.text(v, pretty: false)
                 if let raw = v.stringValue {
                     guard raw.lowercased().hasPrefix(token.lowercased()), raw != token else { return nil }
@@ -221,9 +243,28 @@ enum QueryCompletion {
                 guard quote == nil, lit.hasPrefix(token.lowercased()), lit != token else { return nil }
                 return Suggestion(label: lit, insert: lit, detail: field)
             }
-            return items.isEmpty ? nil : CompletionResult(range: NSRange(location: start, length: cursor - start), items: items)
         }
-        return nil
+        if quote == nil {
+            items += constructorSuggestions(token, fieldType: field.flatMap { catalog.types[$0] })
+        }
+        return items.isEmpty ? nil : CompletionResult(range: NSRange(location: start, length: cursor - start), items: items)
+    }
+
+    /// `Obje` -> `ObjectId("")`. With nothing typed yet, only the constructor that matches
+    /// the field's type is offered (`_id: ` -> `ObjectId("")`), so the popup stays quiet otherwise.
+    private static func constructorSuggestions(_ token: String, fieldType: String?) -> [Suggestion] {
+        let t = token.lowercased()
+        if t.isEmpty {
+            return constructors.filter { $0.type == fieldType }.map {
+                Suggestion(label: $0.insert, insert: $0.insert, detail: fieldType ?? "", caretBack: $0.caretBack)
+            }
+        }
+        // Matching the field's type first, then list order.
+        let ctor = constructors.filter { $0.name.lowercased().hasPrefix(t) }
+            .sorted { ($0.type == fieldType ? 0 : 1) < ($1.type == fieldType ? 0 : 1) }
+            .map { Suggestion(label: $0.insert, insert: $0.insert, detail: $0.type, caretBack: $0.caretBack) }
+        let lits = literals.filter { $0.hasPrefix(t) && $0 != t }.map { Suggestion(label: $0, insert: $0, detail: "") }
+        return ctor + lits
     }
 
     /// Prefix matches first (shallow before deep), then matches on a path segment, then substring.

@@ -144,6 +144,13 @@ struct DocumentTable: NSViewRepresentable {
                 f.target = self; f.representedObject = target
                 menu.addItem(f)
             }
+            if col != "_id", let refs = MainActor.assumeIsolated({ AppState.shared.referenceLinker(db: m.db) }),
+               let target = refs.target(forKey: col), let filter = ReferenceLinker.filter(for: v) {
+                let o = NSMenuItem(title: "Open in \(target)", action: #selector(openReference(_:)), keyEquivalent: "")
+                o.target = self; o.representedObject = (refs.db, target, filter)
+                menu.addItem(o)
+                menu.addItem(.separator())
+            }
             let c = NSMenuItem(title: "Copy value", action: #selector(copyValue(_:)), keyEquivalent: "")
             c.target = self; c.representedObject = target
             menu.addItem(c)
@@ -152,6 +159,11 @@ struct DocumentTable: NSViewRepresentable {
         @objc func filterBy(_ item: NSMenuItem) {
             guard let (col, v) = item.representedObject as? (String, BValue) else { return }
             Task { @MainActor in await self.m.addFilter(path: col, value: v) }
+        }
+
+        @objc func openReference(_ item: NSMenuItem) {
+            guard let (db, coll, filter) = item.representedObject as? (String, String, String) else { return }
+            Task { @MainActor in AppState.shared.openReference(db: db, collection: coll, filter: filter) }
         }
 
         @objc func copyValue(_ item: NSMenuItem) {

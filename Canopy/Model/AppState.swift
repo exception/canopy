@@ -177,6 +177,40 @@ final class AppState {
         return t
     }
 
+    /// Follows a reference: shows `filter` in the target collection's tab, opening a new
+    /// tab when the existing one holds a query of its own.
+    func openReference(db: String, collection: String, filter: String) {
+        let existing = tabs.first { $0.kind == .collection(db: db, name: collection) }
+        let reuse = existing.map { t in
+            let f = t.docs.filterText.trimmingCharacters(in: .whitespacesAndNewlines)
+            return f.isEmpty || f == "{}" || f.hasPrefix("{ _id: ObjectId(") || f.hasPrefix("{ _id: { $in: [ObjectId(")
+        } ?? false
+        let t: WorkspaceTab
+        if let existing, reuse {
+            t = existing
+        } else {
+            guard let session else { return }
+            t = WorkspaceTab(kind: .collection(db: db, name: collection), session: session)
+            if let cur = currentTab, let i = tabs.firstIndex(where: { $0.id == cur.id }) { tabs.insert(t, at: i + 1) } else { tabs.append(t) }
+        }
+        currentTabID = t.id
+        t.mode = .documents
+        t.docs.filterText = filter
+        t.docs.page = 0
+        Task { await t.docs.run() }
+    }
+
+    /// Links ObjectId fields of documents from `db` to the collections they name.
+    /// Starts loading the collection list when the sidebar hasn't yet.
+    func referenceLinker(db: String) -> ReferenceLinker? {
+        guard let session, !db.isEmpty else { return nil }
+        guard let list = session.collections[db] else {
+            if !session.loadingDBs.contains(db) { Task { await session.loadCollections(db) } }
+            return nil
+        }
+        return ReferenceLinker(db: db, collections: list.map(\.name))
+    }
+
     func openServer() {
         if let t = tabs.first(where: { $0.kind == .server }) { currentTabID = t.id; return }
         guard let session else { return }

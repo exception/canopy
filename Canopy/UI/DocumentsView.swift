@@ -333,7 +333,7 @@ struct DocumentCard: View {
     var body: some View {
         let selected = m.selected == index
         VStack(alignment: .leading, spacing: 0) {
-            DocTree(doc: doc, expandAll: expandAll, maxTopLevel: 14, onFilter: { p, v in Task { await m.addFilter(path: p, value: v) } })
+            DocTree(doc: doc, expandAll: expandAll, maxTopLevel: 14, onFilter: { p, v in Task { await m.addFilter(path: p, value: v) } }, refs: app.referenceLinker(db: m.db))
                 .padding(.horizontal, 12).padding(.vertical, 10)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -421,13 +421,15 @@ struct DocTree: View {
     var expandAll = false
     var maxTopLevel = 1000
     var onFilter: ((String, BValue) -> Void)? = nil
+    /// Turns ObjectId fields into links to the collection they name.
+    var refs: ReferenceLinker? = nil
     @State private var showAll = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             let fields = showAll ? doc.fields : Array(doc.fields.prefix(maxTopLevel))
             ForEach(Array(fields.enumerated()), id: \.offset) { _, f in
-                TreeRow(key: f.key, path: f.key, value: f.value, depth: 0, expandAll: expandAll, onFilter: onFilter)
+                TreeRow(key: f.key, path: f.key, value: f.value, depth: 0, expandAll: expandAll, onFilter: onFilter, refs: refs)
             }
             if !showAll && doc.count > maxTopLevel {
                 Button("Show \(doc.count - maxTopLevel) more fields") { showAll = true }
@@ -445,6 +447,9 @@ struct TreeRow: View {
     let depth: Int
     var expandAll: Bool
     var onFilter: ((String, BValue) -> Void)? = nil
+    var refs: ReferenceLinker? = nil
+    /// The field name used to guess a reference; array items use their array's.
+    var linkKey: String? = nil
     @State private var open: Bool?
     @State private var showAllItems = false
 
@@ -461,6 +466,9 @@ struct TreeRow: View {
                 }
                 (Text(key).foregroundStyle(Color(ns: Theme.synKey)) + Text(":").foregroundStyle(Color.cText3)).font(Theme.mono)
                 valueText.lineLimit(value.isContainer ? 1 : 3).textSelection(.enabled)
+                if let target = refTarget, let filter = ReferenceLinker.filter(for: value) {
+                    RefLink(collection: target) { app.openReference(db: refs!.db, collection: target, filter: filter) }
+                }
                 Spacer(minLength: 0)
             }
             .padding(.leading, CGFloat(depth) * 16)
@@ -478,16 +486,20 @@ struct TreeRow: View {
                     Button("Filter where \(path) exists") { onFilter(path, .document(["$exists": true])) }
                     Divider()
                 }
+                if let target = refTarget, let filter = ReferenceLinker.filter(for: value) {
+                    Button("Open in \(target)") { app.openReference(db: refs!.db, collection: target, filter: filter) }
+                    Divider()
+                }
                 Button("Copy value") { app.copy(value.isContainer ? BFormat.text(value) : BFormat.preview(value, max: 1_000_000)) }
                 Button("Copy path") { app.copy(path) }
             }
             if isOpen {
                 switch value {
                 case .document(let d):
-                    ForEach(Array(d.fields.enumerated()), id: \.offset) { _, f in TreeRow(key: f.key, path: path + "." + f.key, value: f.value, depth: depth + 1, expandAll: expandAll, onFilter: onFilter) }
+                    ForEach(Array(d.fields.enumerated()), id: \.offset) { _, f in TreeRow(key: f.key, path: path + "." + f.key, value: f.value, depth: depth + 1, expandAll: expandAll, onFilter: onFilter, refs: refs) }
                 case .array(let a):
                     let shown = showAllItems ? min(a.count, 5000) : min(a.count, 50)
-                    ForEach(0..<shown, id: \.self) { i in TreeRow(key: "\(i)", path: a[i].isContainer ? path + ".\(i)" : path, value: a[i], depth: depth + 1, expandAll: expandAll, onFilter: onFilter) }
+                    ForEach(0..<shown, id: \.self) { i in TreeRow(key: "\(i)", path: a[i].isContainer ? path + ".\(i)" : path, value: a[i], depth: depth + 1, expandAll: expandAll, onFilter: onFilter, refs: refs, linkKey: key) }
                     if a.count > shown {
                         Button(showAllItems ? "\(a.count - shown) more not shown" : "Show all \(Fmt.count(a.count)) items") { showAllItems = true }
                             .buttonStyle(.plain).font(.system(size: 11.5)).foregroundStyle(Color.cAccent)
@@ -497,6 +509,15 @@ struct TreeRow: View {
                 }
             }
         }
+    }
+
+    /// The collection this value points at, when it is an ObjectId (or a list of them)
+    /// under a field named like one.
+    private var refTarget: String? {
+        guard let refs, ReferenceLinker.isReference(value) else { return nil }
+        let k = linkKey ?? key
+        guard k != "_id" else { return nil }
+        return refs.target(forKey: k)
     }
 
     @ViewBuilder private var valueText: some View {
@@ -509,6 +530,29 @@ struct TreeRow: View {
                 .help(d.formatted(date: .complete, time: .complete))
         default: Text(BFormat.text(value, pretty: false)).font(Theme.mono).foregroundStyle(Color(ns: Theme.typeColor(value)))
         }
+    }
+}
+
+/// The small "→ dealerships" link after an ObjectId that names another collection.
+struct RefLink: View {
+    let collection: String
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 2) {
+                Image(systemName: "arrow.up.right").font(.system(size: 8.5, weight: .bold))
+                Text(collection).font(.system(size: 10.5, weight: .medium))
+            }
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .foregroundStyle(hover ? Color.cAccent : Color.cText3)
+            .background(Color.cAccent.opacity(hover ? 0.14 : 0.06), in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .help("Open in \(collection)")
     }
 }
 
@@ -535,7 +579,7 @@ struct DocumentInspector: View {
                 }
                 .padding(.horizontal, 12).frame(height: 38)
                 Divider()
-                ScrollView { DocTree(doc: d, expandAll: true, onFilter: { p, v in Task { await m.addFilter(path: p, value: v) } }).padding(12) }
+                ScrollView { DocTree(doc: d, expandAll: true, onFilter: { p, v in Task { await m.addFilter(path: p, value: v) } }, refs: app.referenceLinker(db: m.db)).padding(12) }
             }
         }
         .background(Color.cPanel)

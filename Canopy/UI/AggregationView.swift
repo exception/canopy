@@ -97,7 +97,7 @@ struct AggregationView: View {
                 ScrollView {
                     LazyVStack(spacing: 8) {
                         ForEach(Array(m.results.enumerated()), id: \.offset) { _, d in
-                            DocTree(doc: d, expandAll: d.count <= 6, maxTopLevel: 20).padding(10)
+                            DocTree(doc: d, expandAll: d.count <= 6, maxTopLevel: 20, refs: app.referenceLinker(db: m.db)).padding(10)
                                 .frame(maxWidth: .infinity, alignment: .leading).card()
                         }
                     }.padding(12)
