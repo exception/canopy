@@ -26,6 +26,11 @@ struct CanopyApp: App {
                 Button("New Connection…") { app.editingConnection = SavedConnection(name: "", uri: "mongodb://localhost:27017") }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
             }
+            // File › Close would close the window (and quit, it's the only one). ⌘W closes a tab instead.
+            CommandGroup(replacing: .saveItem) {
+                Button("Close Tab") { if let id = app.currentTabID { app.close(id) } }
+                    .keyboardShortcut("w")
+            }
             CommandMenu("Connection") {
                 ForEach(Array(app.connections.prefix(9).enumerated()), id: \.element.id) { i, c in
                     Button(c.name + (c.isProduction ? " (production)" : "")) { Task { await app.connect(c) } }
@@ -41,7 +46,6 @@ struct CanopyApp: App {
                 Divider()
                 Button("Next Tab") { app.selectTab(offset: 1) }.keyboardShortcut("]", modifiers: [.command, .shift])
                 Button("Previous Tab") { app.selectTab(offset: -1) }.keyboardShortcut("[", modifiers: [.command, .shift])
-                Button("Close Tab") { if let id = app.currentTabID { app.close(id) } }.keyboardShortcut("w")
                 Divider()
                 ForEach(Array(WorkspaceMode.allCases.enumerated()), id: \.offset) { i, m in
                     Button(m.rawValue) { app.currentTab?.mode = m }.keyboardShortcut(KeyEquivalent(Character("\(i + 1)")))

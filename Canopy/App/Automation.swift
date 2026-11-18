@@ -232,6 +232,24 @@ enum Automation {
                   let refs = app.referenceLinker(db: m.db), let target = refs.target(forKey: arg), let f = ReferenceLinker.filter(for: v) else { return "no reference" }
             app.openReference(db: m.db, collection: target, filter: f)
             return "ok \(target) \(f)"
+        case "menu-keys":
+            // menu-keys <key>: menu items bound to ⌘<key>, to catch shortcut clashes.
+            func walk(_ m: NSMenu, _ path: String) -> [String] {
+                m.items.flatMap { i -> [String] in
+                    var out: [String] = []
+                    if i.keyEquivalent == arg, i.keyEquivalentModifierMask == .command { out.append(path + i.title + (i.isEnabled ? "" : " (disabled)")) }
+                    if let sub = i.submenu { out += walk(sub, path + i.title + " › ") }
+                    return out
+                }
+            }
+            return (NSApp.mainMenu.map { walk($0, "") } ?? []).joined(separator: "; ")
+        case "press":
+            // press <key>: sends ⌘<key> through the main menu like the keyboard would.
+            guard let w = window, let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: w.windowNumber,
+                                                            context: nil, characters: arg, charactersIgnoringModifiers: arg, isARepeat: false, keyCode: 13) else { return "error" }
+            let handled = NSApp.mainMenu?.performKeyEquivalent(with: e) ?? false
+            try? await Task.sleep(for: .milliseconds(300))
+            return "handled=\(handled) tabs=\(app.tabs.count) windowVisible=\(w.isVisible)"
         case "select":
             app.currentTab?.docs.selected = Int(arg)
             return "ok"
