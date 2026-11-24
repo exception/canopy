@@ -401,6 +401,7 @@ struct InlineEditor: View {
             CodeEditor(text: $m.editText, focusOnAppear: true, onSubmit: { Task { await m.saveEdit() } })
                 .frame(minHeight: 160, idealHeight: CGFloat(min(m.editText.split(separator: "\n").count, 30)) * 16 + 20)
                 .background(Color.cField, in: RoundedRectangle(cornerRadius: 7))
+            EditorDates(text: m.editText)
             if let e = m.editError { Label(e, systemImage: "exclamationmark.triangle.fill").font(.system(size: 11.5)).foregroundStyle(Color.cRed) }
             HStack {
                 Spacer()
@@ -411,6 +412,78 @@ struct InlineEditor: View {
         .padding(12)
         .background(Color.cRaised, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.cAccent.opacity(0.6), lineWidth: 1.5))
+    }
+}
+
+/// Under the document editor: each ISODate in the text with its UTC and local time, updating as you type.
+struct EditorDates: View {
+    let text: String
+
+    var body: some View {
+        let dates = DateParsing.isoDates(in: text)
+        if !dates.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Dates").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.cText2)
+                // Side by side when there's room, stacked in the narrow inspector.
+                ViewThatFits(in: .horizontal) {
+                    grid(dates)
+                    stacked(dates)
+                }
+                Text("Stored in UTC. To enter local time, write the offset: ISODate(\"\(Self.offsetExample)\")")
+                    .font(.system(size: 10.5)).foregroundStyle(Color.cText3).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.cField.opacity(0.6), in: RoundedRectangle(cornerRadius: 7))
+        }
+    }
+
+    private typealias Entry = (field: String?, raw: String, date: Date?)
+    private static let zoneLabel = "Local (\(TimeZone.current.abbreviation() ?? TimeZone.current.identifier))"
+
+    private func grid(_ dates: [Entry]) -> some View {
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 2) {
+            GridRow { Text("Field"); Text("UTC"); Text(Self.zoneLabel) }
+                .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.cText3)
+            ForEach(Array(dates.enumerated()), id: \.offset) { _, e in
+                GridRow {
+                    Text(e.field ?? "—").foregroundStyle(Color(ns: Theme.synKey))
+                    utc(e)
+                    local(e)
+                }
+                .font(.system(size: 11, design: .monospaced)).lineLimit(1).fixedSize().textSelection(.enabled)
+            }
+        }
+    }
+
+    private func stacked(_ dates: [Entry]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(dates.enumerated()), id: \.offset) { _, e in
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(e.field ?? "—").foregroundStyle(Color(ns: Theme.synKey))
+                    HStack(spacing: 6) { Text("UTC").foregroundStyle(Color.cText3).frame(width: 34, alignment: .leading); utc(e) }
+                    HStack(spacing: 6) { Text("Local").foregroundStyle(Color.cText3).frame(width: 34, alignment: .leading); local(e) }
+                }
+                .font(.system(size: 11, design: .monospaced)).lineLimit(1).minimumScaleFactor(0.8).textSelection(.enabled)
+            }
+        }
+    }
+
+    @ViewBuilder private func utc(_ e: Entry) -> some View {
+        if let d = e.date { Text(DateParsing.format(d)).foregroundStyle(Color(ns: Theme.synType)) }
+        else { Text(e.raw).foregroundStyle(Color.cRed) }
+    }
+
+    @ViewBuilder private func local(_ e: Entry) -> some View {
+        if let d = e.date { Text(DateParsing.local(d)).foregroundStyle(Color.cText) }
+        else { Text("not a valid date").foregroundStyle(Color.cRed) }
+    }
+
+    /// Now, on the hour, in local time with its offset — something the user can copy and adapt.
+    private static var offsetExample: String {
+        let f = ISO8601DateFormatter(); f.timeZone = .current; f.formatOptions = [.withInternetDateTime]
+        var c = Calendar.current.dateComponents(in: .current, from: Date()); c.minute = 0; c.second = 0; c.nanosecond = 0
+        return f.string(from: c.date ?? Date())
     }
 }
 
@@ -526,7 +599,9 @@ struct TreeRow: View {
         case .array(let a): Text(a.isEmpty ? "[]" : "Array · \(a.count) item\(a.count == 1 ? "" : "s")").font(Theme.mono).foregroundStyle(Color.cText3)
         case .string(let s): Text("\"\(s)\"").font(Theme.mono).foregroundStyle(Color(ns: Theme.synString))
         case .date(let d):
-            Text("\(DateParsing.format(d))").font(Theme.mono).foregroundStyle(Color(ns: Theme.synType))
+            (Text("\(DateParsing.format(d))").foregroundStyle(Color(ns: Theme.synType))
+             + Text("  \(DateParsing.local(d))").foregroundStyle(Color.cText3))
+                .font(Theme.mono)
                 .help(d.formatted(date: .complete, time: .complete))
         default: Text(BFormat.text(value, pretty: false)).font(Theme.mono).foregroundStyle(Color(ns: Theme.typeColor(value)))
         }

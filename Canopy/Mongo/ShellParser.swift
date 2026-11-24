@@ -393,6 +393,27 @@ enum DateParsing {
     }
 
     static func format(_ d: Date) -> String { isoFrac.string(from: d) }
+
+    private static let localFmt: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "EEE d MMM yyyy, HH:mm:ss"; return f
+    }()
+
+    /// The date in the Mac's time zone, e.g. "Tue 24 Nov 2026, 20:00:00 GMT-3".
+    static func local(_ d: Date, zone: TimeZone = .current) -> String {
+        localFmt.timeZone = zone
+        return localFmt.string(from: d) + " " + (zone.abbreviation(for: d) ?? zone.identifier)
+    }
+
+    /// Every ISODate("…") in shell text, with the field name it is assigned to when there is one.
+    static func isoDates(in text: String) -> [(field: String?, raw: String, date: Date?)] {
+        let re = try! NSRegularExpression(pattern: #"(?:["']?([\w$.\-]+)["']?\s*:\s*)?ISODate\(\s*["']([^"']*)["']\s*\)"#)
+        let ns = text as NSString
+        return re.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { m in
+            let field = m.range(at: 1).location == NSNotFound ? nil : ns.substring(with: m.range(at: 1))
+            let raw = ns.substring(with: m.range(at: 2))
+            return (field, raw, parse(raw))
+        }
+    }
 }
 
 extension Data {

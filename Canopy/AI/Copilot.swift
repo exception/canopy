@@ -193,6 +193,7 @@ final class CopilotModel {
         When the user wants a query or pipeline, or one you used would be useful to keep, call propose_query so they get an Apply button; \
         don't only paste it in text. Queries use mongosh syntax.
         Answer concisely in Markdown. Lead with the answer. Use short tables for numbers. Current time: \(AIPrompts.today()).
+        \(AIPrompts.language)
         """
     }
 }
@@ -218,6 +219,7 @@ enum AIActions {
         If the request refines the current query, build on it. Leave sort and projection empty unless asked or clearly implied \
         ("latest" implies a sort). If the request needs grouping or joins, still give the best find query and say so in the note.
         note: one short sentence describing what the query does, in plain words.
+        \(AIPrompts.language)
         """
         let schemaDef: [String: Any] = ["type": "object", "properties": [
             "filter": ["type": "string"], "sort": ["type": "string"], "projection": ["type": "string"], "note": ["type": "string"],
@@ -247,6 +249,7 @@ enum AIActions {
         Return each stage as {op, body}: op is the stage operator like "$group", body is that operator's argument in mongosh syntax. \
         If the request refines the current pipeline, return the whole updated pipeline. Never use $out or $merge unless asked.
         note: one short sentence describing what the pipeline does.
+        \(AIPrompts.language)
         """
         let schemaDef: [String: Any] = ["type": "object", "properties": [
             "stages": ["type": "array", "items": ["type": "object", "properties": ["op": ["type": "string"], "body": ["type": "string"]], "required": ["op", "body"], "additionalProperties": false]],
@@ -276,6 +279,7 @@ enum AIActions {
         You review MongoDB collection schemas inferred from a sample. Write 3 to 6 short Markdown bullets: what the collection holds, \
         then concrete data-quality issues worth fixing (mixed types, optional fields that look required, suspicious values, unbounded arrays), \
         each naming the field. No preamble, no headings.
+        \(AIPrompts.language)
         """
         do {
             let r = try await ClaudeCLI.structured(prompt: "Collection \(m.db).\(m.collection)\n\n\(report.summary)", system: system,
@@ -294,6 +298,7 @@ enum AIActions {
         decimal, date, bool, object, array, null). Mark a field required only if present in ~100% of the sample. Allow null where the sample has nulls. \
         Use enum for string fields with a small fixed set of values. Describe nested objects and array items. Keep it practical, not exhaustive. \
         validator: the full validator document in mongosh syntax, i.e. { $jsonSchema: { … } }. note: 1-3 short bullets on the choices worth double-checking.
+        \(AIPrompts.language)
         """
         let schemaDef: [String: Any] = ["type": "object", "properties": ["validator": ["type": "string"], "note": ["type": "string"]], "required": ["validator", "note"], "additionalProperties": false]
         do {
@@ -315,6 +320,7 @@ enum AIActions {
         You are a MongoDB performance expert. Given a query's explain output and the collection's indexes, say in Markdown: \
         whether it is efficient (one line verdict first, bold), why (docs/keys examined vs returned, COLLSCAN, in-memory SORT), \
         and the single best fix, with the exact createIndex keys following the ESR rule (equality, sort, range) when an index would help. Max 120 words.
+        \(AIPrompts.language)
         """
         let prompt = "Query on \(m.db).\(m.collection): \(m.queryLabel)\n\nIndexes:\n\(ixText)\n\nExplain (executionStats):\n\(String(BFormat.text(.document(s.raw), pretty: false).prefix(12000)))"
         do {
@@ -334,6 +340,7 @@ enum AIActions {
         You recommend MongoDB indexes. Use the recent queries run against the collection (most important), the schema, and existing indexes. \
         Follow the ESR rule. Don't suggest an index an existing one already covers as a prefix. Suggest at most 3, fewer is fine. \
         Also flag existing indexes that are unused (ops=0) and redundant in the note. keys and options are mongosh-syntax documents.
+        \(AIPrompts.language)
         """
         let schemaDef: [String: Any] = ["type": "object", "properties": [
             "suggestions": ["type": "array", "items": ["type": "object", "properties": ["keys": ["type": "string"], "options": ["type": "string"], "reason": ["type": "string"]], "required": ["keys", "options", "reason"], "additionalProperties": false]],
@@ -361,6 +368,7 @@ enum AIActions {
         or an aggregation pipeline array when the new value depends on other fields. Prefer the narrowest correct filter. \
         If the request only describes the change, keep the current filter.
         note: one short sentence saying what will change.
+        \(AIPrompts.language)
         """
         let schemaDef: [String: Any] = ["type": "object", "properties": [
             "filter": ["type": "string"], "update": ["type": "string"], "note": ["type": "string"],

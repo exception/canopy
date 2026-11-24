@@ -215,6 +215,14 @@ enum AIPrompts {
         return f.string(from: Date())
     }
 
+    /// Pins the language of prose fields. Without it the model sometimes answers in the language of the sampled data.
+    static var language: String {
+        let code = Locale.preferredLanguages.first.map { Locale(identifier: $0).language.languageCode?.identifier ?? "en" } ?? "en"
+        let name = Locale(identifier: "en").localizedString(forLanguageCode: code) ?? "English"
+        return "Write all prose (notes, reasons, explanations) in the language the user wrote their request in; when there is no request, write in \(name). " +
+            "Never switch language because of the language of field names or values in the data."
+    }
+
     static let syntax = """
     Write MongoDB values in mongosh syntax: unquoted keys are fine, use ObjectId("…"), ISODate("…"), Decimal128("…"), Long("…"), /regex/i. \
     Use field names exactly as they appear in the schema, including dotted paths for nested fields. Decimal128 fields compare correctly against plain numbers.

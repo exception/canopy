@@ -253,6 +253,11 @@ enum Automation {
         case "select":
             app.currentTab?.docs.selected = Int(arg)
             return "ok"
+        case "edit":
+            // edit <index>: opens the document editor on that row.
+            guard let m = app.currentTab?.docs, let i = Int(arg), m.docs.indices.contains(i) else { return "no such row" }
+            m.beginEdit(i)
+            return "ok"
         case "scroll-bench":
             // scroll-bench <x>: scrolls the scroll view under window point (x, 300) to the bottom in
             // 20 pt steps, forcing a redraw per step; reports per-frame milliseconds.
