@@ -7,10 +7,6 @@ A macOS MongoDB client built with SwiftUI and AppKit, with Claude built in.</p>
 
 ---
 
-> **Status: prototype.** Built in one night as an exploration of "what if Compass were a real Mac app". It works against real deployments, but expect rough edges.
-
-MongoDB Compass is an Electron app: slow to start, heavy to scroll, no real dark mode. Canopy is a native app: SwiftUI and AppKit (the table is a real `NSTableView`), light and dark mode, keyboard-first, and Claude next to your data so you can ask for what you want instead of hand-writing `$group` stages.
-
 ## Highlights
 
 **Ask in plain words.** Type "refunded orders over 15k shipped to Rosario in the last 60 days, newest first" and Claude writes the filter and sort against your real schema (it samples the collection first), then runs it. The query bar stays editable, so you can see and tweak exactly what it wrote.
